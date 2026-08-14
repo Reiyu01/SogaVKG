@@ -1,0 +1,22 @@
+entity: Category
+
+label: 財產類別
+
+source:
+  type: sqlite
+  table: categories
+  alias: c
+
+properties:
+
+  id:
+    label: 系統ID
+    column: id
+    type: integer
+    searchable: false
+
+  name:
+    label: 類別名稱
+    column: name
+    type: string
+    searchable: true

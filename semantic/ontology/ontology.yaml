@@ -1,0 +1,82 @@
+entities:
+
+  Asset:
+    label: 資產
+    properties:
+      asset_code:
+        type: string
+        label: 資產編號
+
+      name:
+        type: string
+        label: 品名
+
+      quantity:
+        type: number
+        label: 數量
+
+      status:
+        type: string
+        label: 狀態
+
+      specification:
+        type: string
+        label: 規格
+
+      note:
+        type: string
+        label: 備註
+
+    relations:
+      belongs_to:
+        target: Category
+        label: 屬於類別
+
+      located_at:
+        target: Location
+        label: 存放於
+
+
+  Category:
+    label: 財產類別
+    properties:
+      name:
+        type: string
+        label: 類別名稱
+
+
+  Location:
+    label: 存放地點
+    properties:
+      name:
+        type: string
+        label: 地點名稱
+
+
+  BorrowRecord:
+    label: 借用紀錄
+    properties:
+      record_no:
+        type: integer
+        label: 紀錄編號
+
+      quantity:
+        type: number
+        label: 借用數量
+
+      match_status:
+        type: string
+        label: 配對狀態
+
+      purpose:
+        type: string
+        label: 用途
+
+      usage_location:
+        type: string
+        label: 使用地點
+
+    relations:
+      references:
+        target: Asset
+        label: 對應資產

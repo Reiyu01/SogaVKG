@@ -1,0 +1,22 @@
+entity: Location
+
+label: 存放地點
+
+source:
+  type: sqlite
+  table: locations
+  alias: l
+
+properties:
+
+  id:
+    label: 系統ID
+    column: id
+    type: integer
+    searchable: false
+
+  name:
+    label: 地點名稱
+    column: name
+    type: string
+    searchable: true

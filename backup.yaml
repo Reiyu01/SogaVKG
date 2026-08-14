@@ -1,0 +1,40 @@
+entity: Asset
+
+source:
+  table: assets
+
+properties:
+
+  asset_code:
+    column: asset_code
+
+  name:
+    column: name
+
+  quantity:
+    column: quantity
+
+  status:
+    column: status
+
+  specification:
+    column: specification
+
+  note:
+    column: note
+
+relations:
+
+  belongs_to:
+    target: Category
+    foreign_key: category_id
+    target_table: categories
+    target_key: id
+    target_label: name
+
+  located_at:
+    target: Location
+    foreign_key: location_id
+    target_table: locations
+    target_key: id
+    target_label: name
