@@ -1,13 +1,15 @@
 from dataclasses import dataclass
 from typing import Any
 
-from app.semantic import SemanticMapper
+from app.semantic.mapper import SemanticMapper
 
 
 @dataclass
 class QueryResult:
     sql: str
     params: dict[str, Any]
+    limit: int
+    limit_was_clamped: bool
 
 
 class SemanticQueryBuilder:
@@ -15,8 +17,26 @@ class SemanticQueryBuilder:
     def __init__(
         self,
         mapper: SemanticMapper,
+        default_fields: tuple[str, ...] | None = None,
+        default_limit: int = 20,
+        maximum_limit: int = 100,
     ):
         self.mapper = mapper
+
+        self.default_fields = default_fields or (
+            "asset_code",
+            "name",
+            "quantity",
+            "status",
+            "category",
+            "location",
+        )
+        self.default_limit = default_limit
+        self.maximum_limit = maximum_limit
+        if not self.default_fields:
+            raise ValueError("default_fields must not be empty")
+        if default_limit < 1 or maximum_limit < default_limit:
+            raise ValueError("invalid query limits")
 
     # ======================================================
     # Public
@@ -25,6 +45,7 @@ class SemanticQueryBuilder:
     def build(
         self,
         query: dict[str, Any],
+        fetch_one_extra: bool = False,
     ) -> QueryResult:
 
         entity = query.get("entity")
@@ -37,10 +58,7 @@ class SemanticQueryBuilder:
         # 確認 Entity 存在
         self.mapper.get_entity(entity)
 
-        fields = query.get(
-            "fields",
-            [],
-        )
+        fields = query.get("fields") or list(self.default_fields)
 
         filters = query.get(
             "filters",
@@ -85,11 +103,6 @@ class SemanticQueryBuilder:
                 field_joins
             )
 
-        if not select_clauses:
-
-            select_clauses = [
-                f"{alias}.*"
-            ]
 
         # --------------------------------------------------
         # WHERE
@@ -127,6 +140,15 @@ class SemanticQueryBuilder:
             joins.extend(
                 filter_joins
             )
+
+        order_by = query.get("order_by")
+        order_by_sql = None
+        if order_by:
+            order_by_sql, order_joins = self._build_order_by(
+                entity,
+                order_by,
+            )
+            joins.extend(order_joins)
 
         # --------------------------------------------------
         # Remove duplicate joins
@@ -169,50 +191,31 @@ class SemanticQueryBuilder:
         # ORDER BY
         # --------------------------------------------------
 
-        order_by = query.get(
-            "order_by"
-        )
-
-        if order_by:
-
-            sql += (
-                "\nORDER BY "
-                + self._build_order_by(
-                    entity,
-                    order_by,
-                )
-            )
+        if order_by_sql:
+            sql += "\nORDER BY " + order_by_sql
 
         # --------------------------------------------------
         # LIMIT
         # --------------------------------------------------
 
-        limit = query.get("limit")
-
-        if limit is not None:
-
-            limit = int(limit)
-
-            if limit <= 0:
-                raise ValueError(
-                    "limit must be greater than 0"
-                )
-
-            # MVP 安全上限
-            limit = min(
-                limit,
-                500,
-            )
-
-            sql += (
-                f"\nLIMIT {limit}"
-            )
+        requested_limit = query.get("limit")
+        if requested_limit is None:
+            requested_limit = self.default_limit
+        if isinstance(requested_limit, bool) or not isinstance(requested_limit, int):
+            raise ValueError("limit must be an integer")
+        if requested_limit <= 0:
+            raise ValueError("limit must be greater than 0")
+        limit = min(requested_limit, self.maximum_limit)
+        sql_limit = limit + 1 if fetch_one_extra else limit
+        sql += f"\nLIMIT {sql_limit}"
 
         sql += ";"
 
         return QueryResult(
             sql=sql,
             params=params,
+            limit=limit,
+            limit_was_clamped=requested_limit > self.maximum_limit,
         )
 
     # ======================================================
@@ -496,7 +499,7 @@ class SemanticQueryBuilder:
         self,
         entity: str,
         order_by: dict[str, Any],
-    ) -> str:
+    ) -> tuple[str, list[str]]:
 
         field = order_by.get(
             "field"
@@ -530,6 +533,4 @@ class SemanticQueryBuilder:
             field_sql.split(" AS ")[-1]
         )
 
-        return (
-            f"{alias} {direction}"
-        )
+        return f"{alias} {direction}", joins

@@ -1,0 +1,90 @@
+schema: spec-driven
+
+context: |
+  Language: 繁體中文（zh-TW）
+
+  所有 OpenSpec 產出的 proposal、specs、design、tasks 與說明內容，
+  必須使用繁體中文，並優先採用台灣常用語彙。技術名稱、API path、
+  class、function、variable、database table/column、framework、protocol
+  與 model 名稱維持原始英文。
+
+  本專案是 SogaVKG（Project B），目前以實驗室資產資料為範圍，
+  未來預計擴展為全校資訊查詢應用。gdrive-rag-cli（Project A）只作為
+  query application、strict interface、bounded orchestration、grounding、
+  observability 與 evaluation 的 Reference Implementation；不得修改
+  gdrive-rag-cli，也不得將 Google Drive、Elasticsearch、document chunk、
+  embedding 或 citation URL 等 Project A 細節直接變成 Project B 需求。
+
+  Project A 的上游參考規格位於：
+  /home/openclawuser/gdrive-rag-cli/openspec/specs/
+
+  SogaVKG 現有 implementation evidence：
+  - SQLite database：backend/data/lab.db。
+  - 資料表：assets、categories、locations、borrow_records。
+  - Semantic ontology：semantic/ontology/ontology.yaml。
+  - 已有 mappings：Asset、Category、Location；BorrowRecord 尚無 mapping。
+  - SemanticMapper 與 SemanticQueryBuilder 已能將 allowlisted semantic query
+    轉為 parameterized SQL，但尚未實際執行 SQL。
+  - 尚無可運行的 FastAPI query endpoint、QueryService、自然語言 planner、
+    grounded answer generator、caller authentication 或完整 tests。
+  - borrow_records 含 borrower_email 等個人資料。
+
+  第一階段 change 的產品範圍是實驗室唯讀查詢 MVP：
+  - 單一可信任使用者 deployment。
+  - 只查詢 Asset 與其 Category、Location 關係。
+  - 接受自然語言問題，但 model 只能產生 strict semantic query plan，
+    不得直接產生或執行 raw SQL。
+  - 所有 entity、field、filter、sort、limit 與 action 都必須驗證。
+  - SQL 必須 parameterized、read-only 且具有 bounded row limit。
+  - 回答只能根據本次查詢 rows，不得以模型外部知識補完。
+  - BorrowRecord、borrower_email、寫入操作、多使用者授權、跨系統整合、
+    dashboard 與 persistent conversation 明確不在第一階段範圍。
+
+  Future whole-school expansion is a roadmap constraint, not current MVP scope.
+  Architecture boundaries must leave room for authentication、RBAC、field/row-level
+  authorization、audit、master data、additional source adapters 與 governance，
+  但不得在目前 change 假裝這些能力已經存在。
+
+  Reverse engineering 與 variant adaptation 必須區分：
+  1. Product Behavior：使用者或外部系統可觀察的行為。
+  2. Business Rule：唯讀、安全、個資、範圍與失敗處理規則。
+  3. Implementation Detail：FastAPI、SQLite、Pydantic、特定 LLM 或內部 class。
+  4. Inferred Intent：無法由 code、test、configuration、schema 或使用者決策證明的推論。
+
+rules:
+  proposal:
+    - "使用繁體中文撰寫。"
+    - "明確說明本 change 是 Project B 的新功能，而非 gdrive-rag-cli baseline extraction。"
+    - "列出 MVP in-scope、non-goals 與未來全校擴展邊界。"
+    - "不得發明現有資料、ontology、mapping 或使用者決策無法支持的業務規則。"
+  specs:
+    - "使用繁體中文撰寫 Requirement 與 Scenario。"
+    - "需求聚焦於外部可觀察行為、business rule 與 acceptance criteria。"
+    - "每個 Requirement 至少包含一個 Given/When/Then Scenario。"
+    - "不得把 FastAPI、SQLite、特定 LLM provider 或 gdrive-rag-cli internal class 寫成 Requirement。"
+    - "明確規定 strict plan validation、parameterized SQL、read-only execution、bounded result 與 fail-closed behavior。"
+    - "回答只能使用本次查詢結果；無資料、無效 plan 或 unsupported query 必須有可驗證的結果語意。"
+    - "BorrowRecord 與個資欄位在本 change 必須保持不可查詢。"
+  design:
+    - "使用繁體中文撰寫，技術名稱維持英文。"
+    - "清楚區分 Required Architecture 與 Reference Implementation。"
+    - "建立 gdrive-rag-cli capability 到 SogaVKG component 的 traceability mapping。"
+    - "記錄 request、planning、policy validation、SQL build、read-only execution、grounding 與 response data flow。"
+    - "記錄 trust boundary、PII boundary、failure handling、replaceable components 與 future school-wide extension points。"
+  tasks:
+    - "使用繁體中文描述工作項目。"
+    - "先建立可測試的 domain/interface contracts，再實作 service、adapter、API 與自然語言功能。"
+    - "每一組 implementation task 必須包含對應 unit 或 API contract tests。"
+    - "不得把 BorrowRecord、寫入操作或全校治理加入此 MVP 的實作 tasks。"
+
+operations:
+  apply:
+    guidance:
+      - "只修改 SogaVKG；gdrive-rag-cli 保持唯讀參考。"
+      - "優先沿用現有 SemanticMapper 與 SemanticQueryBuilder，除非 spec 證明需要最小修改。"
+      - "實作不得讓 model 直接產生或執行 raw SQL，也不得暴露 write adapter。"
+      - "完成 task 前執行與該 task 對應的 tests，並立即更新 tasks checkbox。"
+  archive:
+    guidance:
+      - "Archive 前確認所有 MVP requirements 都有 implementation 與 test evidence。"
+      - "確認 gdrive 專屬實作細節沒有被誤寫為 SogaVKG canonical requirement。"

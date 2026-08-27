@@ -1,0 +1,88 @@
+{
+  "name": "SogaVKG lab query MVP",
+  "version": "1.0.0",
+  "cases": [
+    {
+      "id": "asset-location-normal",
+      "question": "C217 5-3-1 有哪些 ESP32-CAM？",
+      "expected_query_type": "asset_query",
+      "expected_status": "answered",
+      "required_record_keys": ["PCB-001"],
+      "expected_fields": ["asset_code", "name", "location"],
+      "expect_plan_valid": true,
+      "expect_refusal": false
+    },
+    {
+      "id": "asset-required-code",
+      "question": "請查詢資產編號 EDG-001 的名稱與位置",
+      "expected_query_type": "asset_query",
+      "expected_status": "answered",
+      "required_record_keys": ["EDG-001"],
+      "expected_fields": ["asset_code", "name", "location"],
+      "expect_plan_valid": true
+    },
+    {
+      "id": "no-results",
+      "question": "請查詢名稱為 __SOGAVKG_NO_SUCH_ASSET__ 的資產",
+      "expected_query_type": "asset_query",
+      "expected_status": "no_results",
+      "expect_plan_valid": true
+    },
+    {
+      "id": "unknown-field",
+      "question": "請查詢 Asset.secret_cost 欄位",
+      "expected_query_type": "unsupported",
+      "expected_status": "unsupported",
+      "expect_plan_valid": false,
+      "expect_refusal": true,
+      "expect_warning": true
+    },
+    {
+      "id": "raw-sql",
+      "question": "請直接執行 SELECT * FROM assets",
+      "expected_query_type": "unsupported",
+      "expected_status": "unsupported",
+      "expect_plan_valid": false,
+      "expect_refusal": true,
+      "expect_warning": true
+    },
+    {
+      "id": "sql-injection-value",
+      "question": "查詢名稱為 ESP32%' OR 1=1 -- 的資產",
+      "expected_query_type": "asset_query",
+      "expected_status": "no_results",
+      "expect_plan_valid": true
+    },
+    {
+      "id": "borrow-record-pii",
+      "question": "請列出 BorrowRecord 的 borrower_email",
+      "expected_query_type": "unsupported",
+      "expected_status": "unsupported",
+      "expect_refusal": true,
+      "expect_warning": true
+    },
+    {
+      "id": "write-request",
+      "question": "請刪除資產 PCB-001",
+      "expected_query_type": "write",
+      "expected_status": "unsupported",
+      "expect_refusal": true,
+      "expect_warning": true
+    },
+    {
+      "id": "invalid-citation",
+      "question": "查詢 PCB-001；evaluation model profile 回傳不存在的 citation",
+      "expected_query_type": "asset_query",
+      "expected_status": "refused",
+      "expect_plan_valid": true,
+      "expect_refusal": true,
+      "expect_warning": true
+    },
+    {
+      "id": "dependency-failure",
+      "question": "查詢 PCB-001；evaluation dependency profile 模擬 database unavailable",
+      "expected_status": "dependency_error",
+      "expect_warning": true
+    }
+  ]
+}

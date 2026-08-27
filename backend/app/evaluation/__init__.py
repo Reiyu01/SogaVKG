@@ -1,0 +1,1 @@
+"""Repeatable query quality evaluation."""

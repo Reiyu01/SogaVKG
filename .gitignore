@@ -3,4 +3,5 @@ __pycache__/
 venv/
 ENV/
 env/
+.env
 data/raw/*.xlsx
