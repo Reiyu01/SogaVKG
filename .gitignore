@@ -4,3 +4,4 @@ venv/
 ENV/
 env/
 data/raw/*.xlsx
+.env

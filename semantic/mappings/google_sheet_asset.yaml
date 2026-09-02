@@ -1,0 +1,29 @@
+entity: Asset
+
+source:
+  type: google_sheet
+  spreadsheet_id: ${GOOGLE_SPREADSHEET_ID}
+  sheet: 資產清單_整合
+
+properties:
+
+  asset_code:
+    column: 資產編號
+
+  name:
+    column: 品名
+
+  quantity:
+    column: 數量
+
+  status:
+    column: 狀態
+
+  specification:
+    column: 規格
+
+  note:
+    column: 備註
+
+  location:
+    column: 存放地點

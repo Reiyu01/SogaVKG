@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 from typing import Any
 
-from app.semantic import SemanticMapper
-
+from app.semantic.mapper import SemanticMapper
+from app.schemas.semantic_query import SemanticQuery
 
 @dataclass
 class QueryResult:
@@ -24,53 +24,46 @@ class SemanticQueryBuilder:
 
     def build(
         self,
-        query: dict[str, Any],
+        query: SemanticQuery,
     ) -> QueryResult:
 
-        entity = query.get("entity")
+        # ======================================================
+        # Entity
+        # ======================================================
 
-        if not entity:
-            raise ValueError(
-                "Query requires 'entity'"
-            )
+        entity = query.entity
 
-        # 確認 Entity 存在
-        self.mapper.get_entity(entity)
-
-        fields = query.get(
-            "fields",
-            [],
+        self.mapper.get_entity(
+            entity
         )
 
-        filters = query.get(
-            "filters",
-            {},
-        )
-
-        joins: list[str] = []
-        select_clauses: list[str] = []
-
-        # --------------------------------------------------
-        # FROM
-        # --------------------------------------------------
+        # ======================================================
+        # Source
+        # ======================================================
 
         source = self.mapper.get_source(
             entity
         )
 
         table = source["table"]
+
         alias = source.get(
             "alias",
             "t",
         )
 
-        # --------------------------------------------------
+        # ======================================================
         # SELECT
-        # --------------------------------------------------
+        # ======================================================
+
+        fields = query.fields
+
+        select_clauses = []
+        joins = []
 
         for field in fields:
 
-            select_sql, field_joins = (
+            field_sql, field_joins = (
                 self._build_field(
                     entity,
                     field,
@@ -78,7 +71,7 @@ class SemanticQueryBuilder:
             )
 
             select_clauses.append(
-                select_sql
+                field_sql
             )
 
             joins.extend(
@@ -91,18 +84,15 @@ class SemanticQueryBuilder:
                 f"{alias}.*"
             ]
 
-        # --------------------------------------------------
+        # ======================================================
         # WHERE
-        # --------------------------------------------------
+        # ======================================================
 
         where_clauses = []
         params = {}
 
-        for index, (
-            field,
-            value,
-        ) in enumerate(
-            filters.items()
+        for index, filter_item in enumerate(
+            query.filters
         ):
 
             (
@@ -110,10 +100,11 @@ class SemanticQueryBuilder:
                 condition_params,
                 filter_joins,
             ) = self._build_filter(
-                entity,
-                field,
-                value,
-                index,
+                entity=entity,
+                field=filter_item.field,
+                operator=filter_item.operator,
+                value=filter_item.value,
+                index=index,
             )
 
             where_clauses.append(
@@ -128,17 +119,17 @@ class SemanticQueryBuilder:
                 filter_joins
             )
 
-        # --------------------------------------------------
-        # Remove duplicate joins
-        # --------------------------------------------------
+        # ======================================================
+        # Remove duplicate JOIN
+        # ======================================================
 
         joins = list(
             dict.fromkeys(joins)
         )
 
-        # --------------------------------------------------
-        # Build SQL
-        # --------------------------------------------------
+        # ======================================================
+        # SQL
+        # ======================================================
 
         sql = (
             "SELECT\n"
@@ -149,12 +140,20 @@ class SemanticQueryBuilder:
             + f"\nFROM {table} {alias}"
         )
 
+        # ======================================================
+        # JOIN
+        # ======================================================
+
         if joins:
 
             sql += (
                 "\n"
                 + "\n".join(joins)
             )
+
+        # ======================================================
+        # WHERE
+        # ======================================================
 
         if where_clauses:
 
@@ -165,42 +164,28 @@ class SemanticQueryBuilder:
                 )
             )
 
-        # --------------------------------------------------
+        # ======================================================
         # ORDER BY
-        # --------------------------------------------------
+        # ======================================================
 
-        order_by = query.get(
-            "order_by"
-        )
-
-        if order_by:
+        if query.order_by:
 
             sql += (
                 "\nORDER BY "
                 + self._build_order_by(
                     entity,
-                    order_by,
+                    query.order_by.model_dump(),
                 )
             )
 
-        # --------------------------------------------------
+        # ======================================================
         # LIMIT
-        # --------------------------------------------------
+        # ======================================================
 
-        limit = query.get("limit")
+        if query.limit is not None:
 
-        if limit is not None:
-
-            limit = int(limit)
-
-            if limit <= 0:
-                raise ValueError(
-                    "limit must be greater than 0"
-                )
-
-            # MVP 安全上限
             limit = min(
-                limit,
+                query.limit,
                 500,
             )
 
@@ -227,6 +212,8 @@ class SemanticQueryBuilder:
         str,
         list[str],
     ]:
+        #2026/08/31
+        field = field.split(".")[0]
 
         alias = self.mapper.get_alias(
             entity
@@ -319,109 +306,144 @@ class SemanticQueryBuilder:
         self,
         entity: str,
         field: str,
-        value: Any,
+        operator: str,
+        value,
         index: int,
-    ) -> tuple[
-        str,
-        dict[str, Any],
-        list[str],
-    ]:
-
-        param_name = (
-            f"filter_{index}"
-        )
-
+    ):
+        param_name = f"filter_{index}"
+        
+        #2026/08/31
+        field = field.split(".")[0]
+        
         alias = self.mapper.get_alias(
             entity
         )
 
-        properties = (
-            self.mapper.get_properties(
-                entity
-            )
+        properties = self.mapper.get_properties(
+            entity
         )
 
-        # --------------------------------------------------
-        # Property filter
-        # --------------------------------------------------
+        # ======================================================
+        # Property
+        # ======================================================
 
         if field in properties:
 
-            column = (
-                self.mapper.get_property_column(
-                    entity,
-                    field,
-                )
+            column = self.mapper.get_property_column(
+                entity,
+                field,
             )
 
-            property_info = properties[
-                field
-            ]
+            property_info = properties[field]
 
             data_type = property_info.get(
                 "type",
                 "string",
             )
 
-            # 字串使用 LIKE
-            if (
-                data_type == "string"
-                and isinstance(value, str)
-            ):
+            column_sql = f"{alias}.{column}"
+
+            # ----------------------------------------------
+            # LIKE
+            # ----------------------------------------------
+
+            if operator == "LIKE":
 
                 return (
-                    f"{alias}.{column} "
-                    f"LIKE :{param_name}",
+                    f"{column_sql} LIKE :{param_name}",
                     {
-                        param_name:
-                            f"%{value}%"
+                        param_name: f"%{value}%"
                     },
                     [],
                 )
 
-            # Number / integer 等
+            # ----------------------------------------------
+            # IN
+            # ----------------------------------------------
+
+            if operator == "IN":
+
+                if not isinstance(value, list):
+                    raise ValueError(
+                        "IN operator requires a list"
+                    )
+
+                placeholders = []
+
+                params = {}
+
+                for i, item in enumerate(value):
+
+                    name = (
+                        f"{param_name}_{i}"
+                    )
+
+                    placeholders.append(
+                        f":{name}"
+                    )
+
+                    params[name] = item
+
+                return (
+                    f"{column_sql} IN "
+                    f"({', '.join(placeholders)})",
+                    params,
+                    [],
+                )
+
+            # ----------------------------------------------
+            # Comparison
+            # ----------------------------------------------
+
+            allowed_operators = {
+                "=",
+                "!=",
+                ">",
+                ">=",
+                "<",
+                "<=",
+            }
+
+            if operator not in allowed_operators:
+                raise ValueError(
+                    f"Unsupported operator: "
+                    f"{operator}"
+                )
+
             return (
-                f"{alias}.{column} "
-                f"= :{param_name}",
+                f"{column_sql} "
+                f"{operator} "
+                f":{param_name}",
                 {
                     param_name: value
                 },
                 [],
             )
 
-        # --------------------------------------------------
-        # Relation filter
-        # --------------------------------------------------
+        # ======================================================
+        # Relation
+        # ======================================================
 
-        relations = (
-            self.mapper.get_relations(
-                entity
-            )
+        relations = self.mapper.get_relations(
+            entity
         )
 
         if field in relations:
 
-            relation = (
-                self.mapper.get_relation(
-                    entity,
-                    field,
-                )
+            relation = self.mapper.get_relation(
+                entity,
+                field,
             )
 
-            join = (
-                self._build_relation_join(
-                    entity,
-                    relation,
-                )
+            join = self._build_relation_join(
+                entity,
+                relation,
             )
 
-            target_entity = (
-                relation["target"]["entity"]
-            )
+            target = relation["target"]
 
-            target_alias = (
-                relation["target"]["alias"]
-            )
+            target_entity = target["entity"]
+            target_alias = target["alias"]
 
             display_property = (
                 relation["display"]["property"]
@@ -434,12 +456,32 @@ class SemanticQueryBuilder:
                 )
             )
 
+            column_sql = (
+                f"{target_alias}.{target_column}"
+            )
+
+            if operator == "LIKE":
+
+                return (
+                    f"{column_sql} LIKE :{param_name}",
+                    {
+                        param_name: f"%{value}%"
+                    },
+                    [join],
+                )
+
+            if operator != "=":
+
+                raise ValueError(
+                    f"Relation field "
+                    f"'{field}' only supports "
+                    f"LIKE or = currently."
+                )
+
             return (
-                f"{target_alias}.{target_column} "
-                f"LIKE :{param_name}",
+                f"{column_sql} = :{param_name}",
                 {
-                    param_name:
-                        f"%{value}%"
+                    param_name: value
                 },
                 [join],
             )
@@ -448,6 +490,120 @@ class SemanticQueryBuilder:
             f"Unknown filter: "
             f"{entity}.{field}"
         )
+
+
+    def _build_relation_join(
+        self,
+        entity: str,
+        relation: dict,
+    ) -> str:
+        """
+        根據 YAML Mapping 建立 JOIN。
+
+        例如：
+
+        Asset.location
+
+        YAML:
+            source:
+            foreign_key: location_id
+
+            target:
+            table: locations
+            alias: l
+            key: id
+
+        會產生：
+
+            LEFT JOIN locations l
+                ON a.location_id = l.id
+        """
+
+        # ======================================================
+        # Source
+        # ======================================================
+
+        source = self.mapper.get_source(
+            entity
+        )
+
+        source_alias = source.get(
+            "alias",
+            "t",
+        )
+
+        # ======================================================
+        # Foreign Key
+        # ======================================================
+
+        source_config = relation.get(
+            "source",
+            {}
+        )
+
+        foreign_key = source_config.get(
+            "foreign_key"
+        )
+
+        if not foreign_key:
+            raise ValueError(
+                f"Relation '{entity}' "
+                f"does not define "
+                f"source.foreign_key"
+            )
+
+        # ======================================================
+        # Target
+        # ======================================================
+
+        target = relation.get(
+            "target",
+            {}
+        )
+
+        target_table = target.get(
+            "table"
+        )
+
+        target_alias = target.get(
+            "alias"
+        )
+
+        target_key = target.get(
+            "key"
+        )
+
+        if not target_table:
+            raise ValueError(
+                f"Relation '{entity}' "
+                f"does not define "
+                f"target.table"
+            )
+
+        if not target_alias:
+            raise ValueError(
+                f"Relation '{entity}' "
+                f"does not define "
+                f"target.alias"
+            )
+
+        if not target_key:
+            raise ValueError(
+                f"Relation '{entity}' "
+                f"does not define "
+                f"target.key"
+            )
+
+        # ======================================================
+        # Build JOIN
+        # ======================================================
+
+        return (
+            f"LEFT JOIN {target_table} {target_alias}\n"
+            f"    ON {source_alias}.{foreign_key} "
+            f"= {target_alias}.{target_key}"
+        )
+
 
     # ======================================================
     # JOIN

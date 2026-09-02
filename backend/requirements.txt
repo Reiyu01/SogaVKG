@@ -5,3 +5,7 @@ pandas
 openpyxl 
 pydantic-settings
 pyyaml
+openai
+langgraph
+gspread 
+google-auth

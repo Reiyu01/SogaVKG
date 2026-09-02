@@ -58,3 +58,64 @@ query = {
 
     "limit": 20,
 }
+
+
+
+怎麼用?
+直接將下面範本貼至到test_query_builder2.py的query中
+
+1. 查 ESP32
+SemanticQuery(
+    entity="Asset",
+    fields=[
+        "name",
+        "quantity",
+    ],
+    filters=[
+        QueryFilter(
+            field="name",
+            operator="LIKE",
+            value="ESP32",
+        )
+    ]
+)
+
+2. 查數量小於 5
+SemanticQuery(
+    entity="Asset",
+    fields=[
+        "name",
+        "quantity",
+    ],
+    filters=[
+        QueryFilter(
+            field="quantity",
+            operator="<",
+            value=5,
+        )
+    ]
+)
+預期輸出: WHERE a.quantity < :filter_0
+
+3. 查 C217 的 Sensor
+SemanticQuery(
+    entity="Asset",
+    fields=[
+        "name",
+        "quantity",
+        "category",
+        "location",
+    ],
+    filters=[
+        QueryFilter(
+            field="category",
+            operator="LIKE",
+            value="Sensor",
+        ),
+        QueryFilter(
+            field="location",
+            operator="LIKE",
+            value="C217",
+        ),
+    ],
+)
