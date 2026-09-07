@@ -31,14 +31,30 @@ QUERY_TOOL = {
                 "entity": {"type": "string"},
                 "fields": {
                     "type": "array",
-                    "items": {"type": "string"},
+                    "items": {
+                        "type": "string",
+                        "description": (
+                            "欄位名稱，直接使用單一語義名稱即可，"
+                            "例如 'location'、'category'。"
+                            "不要加點號或屬性名稱，"
+                            "錯誤示範：'location.name'、'category.name'。"
+                        ),
+                    },
                 },
                 "filters": {
                     "type": "array",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "field": {"type": "string"},
+                            "field": {
+                                "type": "string",
+                                "description": (
+                                    "要過濾的欄位名稱，直接使用單一語義名稱，"
+                                    "例如 'location'、'category'、'quantity'。"
+                                    "不要加點號，"
+                                    "錯誤示範：'location.name'。"
+                                ),
+                            },
                             "operator": {
                                 "type": "string",
                                 "enum": [
@@ -46,7 +62,14 @@ QUERY_TOOL = {
                                     "<", "<=", "LIKE", "IN",
                                 ],
                             },
-                            "value": {},
+                            "value": {
+                                "description": (
+                                    "比對的值。若 operator 是 LIKE，"
+                                    "直接給關鍵字本身即可，不需要加 % 符號，"
+                                    "例如 value 寫 'C217'，"
+                                    "錯誤示範：'%C217%'。"
+                                ),
+                            },
                         },
                         "required": ["field", "operator", "value"],
                     },
