@@ -32,3 +32,13 @@ relations:
       entity: Category
     display:
       property: name
+
+  location:
+    label: 存放地點
+    relationship_type: STORED_AT
+    ingestion:
+      foreign_key: location_id    # ← 檢查這個有沒有漏掉
+    target:
+      entity: Location
+    display:
+      property: name
