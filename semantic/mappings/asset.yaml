@@ -4,6 +4,14 @@ label: 資產
 source:
   node_label: Asset
 
+# ---- 新增：建置階段設定 ----
+ingestion:
+  source_type: sqlite        # 這個 entity 的資料要從哪裡讀
+  source_table: assets       # SQLite 裡的表名
+  # 如果之後這個 entity 改從 Google Sheet 讀，只要改成：
+  # source_type: google_sheets
+  # sheet_name: Assets
+
 properties:
   asset_code: {column: asset_code, type: string, searchable: true}
   name: {column: name, type: string, searchable: true}
@@ -16,17 +24,11 @@ relations:
   category:
     label: 財產類別
     relationship_type: BELONGS_TO
-    direction: outgoing
+    # ---- 新增：建置階段怎麼知道要連去哪個 Category 節點 ----
+    ingestion:
+      foreign_key: category_id   # SQLite 來源表裡的外鍵欄位
+      target_key: id              # 對應到 Category 節點的哪個屬性
     target:
       entity: Category
-    display:
-      property: name
-
-  location:
-    label: 存放地點
-    relationship_type: STORED_AT
-    direction: outgoing
-    target:
-      entity: Location
     display:
       property: name
