@@ -187,7 +187,7 @@ class IngestionPipeline:
 # ======================================================
 
 def main():
-    mapper = SemanticMapper("semantic/mappings")
+    mapper = SemanticMapper("../semantic/mappings")
 
     pipeline = IngestionPipeline(
         mapper=mapper,

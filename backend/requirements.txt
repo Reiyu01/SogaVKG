@@ -9,3 +9,4 @@ openai
 langgraph
 gspread 
 google-auth
+neo4j

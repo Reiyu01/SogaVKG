@@ -87,6 +87,7 @@ class CypherQueryBuilder:
     # ------------------------------------------------------
 
     def _resolve_field(self, entity: str, field: str, var: str) -> tuple[str, str | None]:
+        field = field.split(".")[0]
         properties = self.mapper.get_properties(entity)
 
         if field in properties:
@@ -116,6 +117,7 @@ class CypherQueryBuilder:
         self, entity: str, field: str, operator: str, value: Any,
         index: int, var: str,
     ) -> tuple[str, dict[str, Any], str | None]:
+        field = field.split(".")[0]
         param_name = f"filter_{index}"
         properties = self.mapper.get_properties(entity)
 
