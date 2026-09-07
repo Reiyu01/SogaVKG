@@ -1,86 +1,32 @@
 entity: Asset
-
 label: 資產
 
 source:
-  type: sqlite
-  table: assets
-  alias: a
+  node_label: Asset
 
 properties:
-
-  id:
-    label: 系統ID
-    column: id
-    type: integer
-    searchable: false
-
-  asset_code:
-    label: 資產編號
-    column: asset_code
-    type: string
-    searchable: true
-
-  name:
-    label: 品名
-    column: name
-    type: string
-    searchable: true
-
-  quantity:
-    label: 數量
-    column: quantity
-    type: number
-    searchable: false
-
-  status:
-    label: 狀態
-    column: status
-    type: string
-    searchable: true
-
-  specification:
-    label: 規格
-    column: specification
-    type: string
-    searchable: true
-
-  note:
-    label: 備註
-    column: note
-    type: string
-    searchable: true
+  asset_code: {column: asset_code, type: string, searchable: true}
+  name: {column: name, type: string, searchable: true}
+  quantity: {column: quantity, type: number}
+  status: {column: status, type: string, searchable: true}
+  specification: {column: specification, type: string, searchable: true, fulltext: true}
+  note: {column: note, type: string, searchable: true, fulltext: true}
 
 relations:
-
   category:
     label: 財產類別
-    type: many_to_one
-
-    source:
-      foreign_key: category_id
-
+    relationship_type: BELONGS_TO
+    direction: outgoing
     target:
       entity: Category
-      table: categories
-      alias: c
-      key: id
-
     display:
       property: name
 
   location:
     label: 存放地點
-    type: many_to_one
-
-    source:
-      foreign_key: location_id
-
+    relationship_type: STORED_AT
+    direction: outgoing
     target:
       entity: Location
-      table: locations
-      alias: l
-      key: id
-
     display:
       property: name

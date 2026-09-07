@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.adapters.sqlite_adapter import SQLiteAdapter
+# from app.adapters.sqlite_adapter import SQLiteAdapter
 from app.core.config import (
     SQLITE_DB_PATH,
     MAPPING_DIR,
@@ -11,6 +11,12 @@ from app.services.query_service import QueryService
 
 from pydantic import BaseModel
 from app.services.nl_query_graph import NLQueryGraph
+
+#0907
+from app.adapters.neo4j_adapter import Neo4jAdapter
+from app.semantic.cypher_query_builder import CypherQueryBuilder
+import os
+
 
 router = APIRouter(
     prefix="/query",
@@ -27,8 +33,15 @@ print(
 )
 
 
-db = SQLiteAdapter(
-    str(SQLITE_DB_PATH)
+# db = SQLiteAdapter(
+#     str(SQLITE_DB_PATH)
+# )
+
+#0907
+db = Neo4jAdapter(
+    uri=os.environ["NEO4J_URI"],
+    user=os.environ["NEO4J_USER"],
+    password=os.environ["NEO4J_PASSWORD"],
 )
 
 mapper = SemanticMapper(

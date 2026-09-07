@@ -7,9 +7,12 @@
 from app.adapters.base import DatabaseAdapter
 from app.schemas.semantic_query import SemanticQuery
 from app.semantic.mapper import SemanticMapper
-from app.semantic.query_builder import (
-    SemanticQueryBuilder,
-)
+from app.semantic.cypher_query_builder import CypherQueryBuilder
+
+
+# from app.semantic.query_builder import (
+#     SemanticQueryBuilder,
+# )
 
 
 class QueryService:
@@ -21,11 +24,12 @@ class QueryService:
     ):
         self.db = db
 
-        self.builder = (
-            SemanticQueryBuilder(
-                mapper
-            )
-        )
+        self.builder = CypherQueryBuilder(mapper) 
+        # self.builder = (
+        #     SemanticQueryBuilder(
+        #         mapper
+        #     )
+        # )
 
     def execute(
         self,
@@ -36,10 +40,11 @@ class QueryService:
             self.builder.build(query)
         )
 
-        rows = self.db.execute(
-            query_result.sql,
-            query_result.params,
-        )
+        rows = self.db.execute(query_result.cypher, query_result.params) 
+        # rows = self.db.execute(
+        #     query_result.sql,
+        #     query_result.params,
+        # )
 
         return {
             "data": rows,
