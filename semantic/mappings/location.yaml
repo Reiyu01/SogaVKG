@@ -3,9 +3,12 @@ entity: Location
 label: 存放地點
 
 source:
-  type: sqlite
-  table: locations
-  alias: l
+  node_label: Location
+
+ingestion:
+  source_type: sqlite
+  source_table: locations
+  primary_key: id
 
 properties:
 

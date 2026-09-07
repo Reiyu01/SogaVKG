@@ -3,12 +3,9 @@ entity: Category
 label: 財產類別
 
 source:
-  node_label: Category
-
-ingestion:
-  source_type: sqlite
-  source_table: categories
-  primary_key: id
+  type: sqlite
+  table: categories
+  alias: c
 
 properties:
 

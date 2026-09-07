@@ -1,14 +1,11 @@
-entity: Category
+entity: Location
 
-label: 財產類別
+label: 存放地點
 
 source:
-  node_label: Category
-
-ingestion:
-  source_type: sqlite
-  source_table: categories
-  primary_key: id
+  type: sqlite
+  table: locations
+  alias: l
 
 properties:
 
@@ -19,7 +16,7 @@ properties:
     searchable: false
 
   name:
-    label: 類別名稱
+    label: 地點名稱
     column: name
     type: string
     searchable: true
