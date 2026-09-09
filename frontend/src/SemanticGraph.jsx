@@ -9,8 +9,13 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
-const GRAPH_API_URL = 'http://127.0.0.1:8000/query/graph';
-const QUERY_API_URL = 'http://127.0.0.1:8000/query/';
+
+const API_BASE = 'http://163.18.26.230:8000';
+
+const GRAPH_API_URL = `${API_BASE}/query/graph`;
+const DATA_GRAPH_API_URL = `${API_BASE}/query/graph/data`;
+const QUERY_API_URL = `${API_BASE}/query/`;
+
 
 // ======================================================
 // 佈局：圓形排版

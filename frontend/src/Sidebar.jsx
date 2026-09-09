@@ -22,14 +22,25 @@ export default function Sidebar() {
         padding: '20px 12px',
         boxSizing: 'border-box',
         flexShrink: 0,
+        background: '#fff',
       }}
     >
-      <div style={{ fontWeight: 700, fontSize: '15px', padding: '0 4px 20px' }}>
-        語義查詢系統
+      <div
+        style={{
+          fontWeight: 700,
+          fontSize: '15px',
+          padding: '0 4px 20px',
+        }}
+      >
+        Soga Knowledge
       </div>
 
       <NavLink to="/" end style={linkStyle}>
         知識圖譜
+      </NavLink>
+
+      <NavLink to="/build" style={linkStyle}>
+        建置資料
       </NavLink>
 
       <NavLink to="/ask" style={linkStyle}>
