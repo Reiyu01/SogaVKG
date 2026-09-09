@@ -149,6 +149,197 @@ def get_graph():
         "edges": edges,
     }
 
+@router.get("/graph/data")
+def get_graph_data(
+    entity: str | None = None,
+    limit: int = 100,
+):
+    if limit < 1:
+        limit = 1
+
+    if limit > 500:
+        limit = 500
+
+    params = {
+        "limit": limit,
+    }
+
+    if entity:
+        query = """
+        MATCH (n)
+        WHERE $entity IN labels(n)
+
+        WITH n
+        LIMIT $limit
+
+        OPTIONAL MATCH (n)-[r]->(m)
+
+        RETURN
+            elementId(n) AS node_id,
+            labels(n) AS node_labels,
+            properties(n) AS node_properties,
+
+            CASE
+                WHEN r IS NULL
+                THEN NULL
+                ELSE elementId(r)
+            END AS relationship_id,
+
+            CASE
+                WHEN r IS NULL
+                THEN NULL
+                ELSE type(r)
+            END AS relationship_type,
+
+            CASE
+                WHEN m IS NULL
+                THEN NULL
+                ELSE elementId(m)
+            END AS target_id,
+
+            CASE
+                WHEN m IS NULL
+                THEN NULL
+                ELSE labels(m)
+            END AS target_labels,
+
+            CASE
+                WHEN m IS NULL
+                THEN NULL
+                ELSE properties(m)
+            END AS target_properties
+        """
+
+        params["entity"] = entity
+
+    else:
+        query = """
+        MATCH (n)
+
+        WITH n
+        LIMIT $limit
+
+        OPTIONAL MATCH (n)-[r]->(m)
+
+        RETURN
+            elementId(n) AS node_id,
+            labels(n) AS node_labels,
+            properties(n) AS node_properties,
+
+            CASE
+                WHEN r IS NULL
+                THEN NULL
+                ELSE elementId(r)
+            END AS relationship_id,
+
+            CASE
+                WHEN r IS NULL
+                THEN NULL
+                ELSE type(r)
+            END AS relationship_type,
+
+            CASE
+                WHEN m IS NULL
+                THEN NULL
+                ELSE elementId(m)
+            END AS target_id,
+
+            CASE
+                WHEN m IS NULL
+                THEN NULL
+                ELSE labels(m)
+            END AS target_labels,
+
+            CASE
+                WHEN m IS NULL
+                THEN NULL
+                ELSE properties(m)
+            END AS target_properties
+        """
+
+    rows = db.execute(
+        query,
+        params,
+    )
+
+    nodes = {}
+    edges = {}
+
+    for row in rows:
+        node_id = row["node_id"]
+
+        if node_id not in nodes:
+            labels = row.get("node_labels") or []
+            props = row.get("node_properties") or {}
+
+            nodes[node_id] = {
+                "id": node_id,
+                "labels": labels,
+                "label": (
+                    props.get("name")
+                    or props.get("asset_code")
+                    or props.get("_source_id")
+                    or labels[0]
+                    if labels
+                    else node_id
+                ),
+                "properties": props,
+            }
+
+        target_id = row.get("target_id")
+
+        if target_id:
+            if target_id not in nodes:
+                target_labels = (
+                    row.get("target_labels")
+                    or []
+                )
+
+                target_props = (
+                    row.get("target_properties")
+                    or {}
+                )
+
+                nodes[target_id] = {
+                    "id": target_id,
+                    "labels": target_labels,
+                    "label": (
+                        target_props.get("name")
+                        or target_props.get("asset_code")
+                        or target_props.get("_source_id")
+                        or target_labels[0]
+                        if target_labels
+                        else target_id
+                    ),
+                    "properties": target_props,
+                }
+
+        relationship_id = row.get(
+            "relationship_id"
+        )
+
+        if (
+            relationship_id
+            and target_id
+        ):
+            edges[relationship_id] = {
+                "id": relationship_id,
+                "source": node_id,
+                "target": target_id,
+                "type": row.get(
+                    "relationship_type"
+                ),
+            }
+
+    return {
+        "nodes": list(nodes.values()),
+        "edges": list(edges.values()),
+        "count": {
+            "nodes": len(nodes),
+            "edges": len(edges),
+        },
+    }
+
 
 # ======================================================
 # Ingestion
