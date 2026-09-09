@@ -99,25 +99,40 @@ class IngestionPipeline:
         rows: list[dict],
     ):
         node_label = mapping["source"]["node_label"]
-        properties = mapping.get("properties", {})
 
-        ingestion_config = mapping.get("ingestion", {})
-        primary_key = ingestion_config.get("primary_key", "id")
-        source_id = row.get(primary_key)
+        properties = mapping.get(
+            "properties",
+            {},
+        )
+
+        ingestion_config = mapping.get(
+            "ingestion",
+            {},
+        )
+
+        primary_key = ingestion_config.get(
+            "primary_key",
+            "id",
+        )
 
         batch = []
 
         for row in rows:
-            props = {
-                prop_name: row.get(prop_info["column"])
-                for prop_name, prop_info in properties.items()
-                if prop_info["column"] in row
-            }
-
-            source_id = row.get(primary_key)
+            source_id = row.get(
+                primary_key
+            )
 
             if source_id is None:
                 continue
+
+            props = {
+                prop_name: row.get(
+                    prop_info["column"]
+                )
+                for prop_name, prop_info
+                in properties.items()
+                if prop_info["column"] in row
+            }
 
             props["_source_id"] = source_id
 
@@ -133,13 +148,13 @@ class IngestionPipeline:
 
         session.run(
             f"""
-            UNWIND $rows AS row
+            UNWIND $rows AS item
 
             MERGE (n:{node_label} {{
-                _source_id: row.source_id
+                _source_id: item.source_id
             }})
 
-            SET n += row.props
+            SET n += item.props
             """,
             rows=batch,
         )
