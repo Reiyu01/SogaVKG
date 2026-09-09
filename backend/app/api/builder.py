@@ -39,6 +39,9 @@ class SourceSchemaRequest(BaseModel):
     source_type: str = "sqlite"
     path: str | None = None
 
+class BuildRequest(BaseModel):
+    reset: bool = True
+
 class MappingRequest(BaseModel):
     entity: str
     label: str | None = None
@@ -357,6 +360,7 @@ def preview_graph():
 
 @router.post("/build")
 def start_build(
+    request: BuildRequest,
     background_tasks: BackgroundTasks,
 ):
 
@@ -393,6 +397,7 @@ def start_build(
         run_ingestion_job,
         job,
         pipeline_factory,
+        request.reset,
     )
 
     return {

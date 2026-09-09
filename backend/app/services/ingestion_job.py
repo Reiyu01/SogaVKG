@@ -55,21 +55,44 @@ def create_job() -> IngestionJob:
 def get_job(job_id: str) -> IngestionJob | None:
     return _jobs.get(job_id)
 
-
-def run_ingestion_job(job: IngestionJob, pipeline_factory):
+def run_ingestion_job(
+    job: IngestionJob,
+    pipeline_factory,
+    reset: bool = True,
+):
     """在背景執行緒跑建置流程，邊跑邊更新 job 狀態。"""
+
     job.status = JobStatus.RUNNING
 
-    def on_progress(step: str, message: str):
-        job.log(step, message)
+    def on_progress(
+        step: str,
+        message: str,
+    ):
+        job.log(
+            step,
+            message,
+        )
 
     try:
-        pipeline = pipeline_factory(on_progress)
-        pipeline.run(reset=True)
+        pipeline = pipeline_factory(
+            on_progress
+        )
+
+        pipeline.run(
+            reset=reset
+        )
+
         pipeline.close()
+
         job.status = JobStatus.DONE
+
     except Exception as exc:
         job.status = JobStatus.FAILED
         job.error = str(exc)
+
     finally:
-        job.finished_at = datetime.now(timezone.utc).isoformat()
+        job.finished_at = (
+            datetime.now(
+                timezone.utc
+            ).isoformat()
+        )
