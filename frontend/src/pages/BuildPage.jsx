@@ -2116,4 +2116,3 @@ async function startBuild() {
     </div>
   );
 }
-}
