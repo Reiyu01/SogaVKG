@@ -91,9 +91,21 @@ class IngestionPipeline:
             self._create_fulltext_indexes(session)
             self.on_progress("done", "建置完成")
 
-    def _create_nodes(self, session, entity: str, mapping: dict, rows: list[dict]):
+    def _create_nodes(
+        self,
+        session,
+        entity: str,
+        mapping: dict,
+        rows: list[dict],
+    ):
         node_label = mapping["source"]["node_label"]
         properties = mapping.get("properties", {})
+
+        ingestion_config = mapping.get("ingestion", {})
+        primary_key = ingestion_config.get("primary_key", "id")
+        source_id = row.get(primary_key)
+
+        batch = []
 
         for row in rows:
             props = {
@@ -101,37 +113,118 @@ class IngestionPipeline:
                 for prop_name, prop_info in properties.items()
                 if prop_info["column"] in row
             }
-            if "id" in row:
-                props["_source_id"] = row["id"]
 
-            session.run(f"CREATE (n:{node_label} $props)", props=props)
+            source_id = row.get(primary_key)
 
-    def _create_relationships(self, session, entity: str, mapping: dict, relation: dict, rows: list[dict]):
+            if source_id is None:
+                continue
+
+            props["_source_id"] = source_id
+
+            batch.append(
+                {
+                    "source_id": source_id,
+                    "props": props,
+                }
+            )
+
+        if not batch:
+            return
+
+        session.run(
+            f"""
+            UNWIND $rows AS row
+
+            MERGE (n:{node_label} {{
+                _source_id: row.source_id
+            }})
+
+            SET n += row.props
+            """,
+            rows=batch,
+        )
+    def _create_relationships(
+        self,
+        session,
+        entity: str,
+        mapping: dict,
+        relation: dict,
+        rows: list[dict],
+    ):
         source_node_label = mapping["source"]["node_label"]
+
         rel_type = relation["relationship_type"]
+
         rel_ingestion = relation["ingestion"]
+
         foreign_key = rel_ingestion["foreign_key"]
 
         target_entity = relation["target"]["entity"]
-        target_mapping = self.mapper.get_entity(target_entity)
-        target_node_label = target_mapping["source"]["node_label"]
 
-        source_key_column = mapping.get("ingestion", {}).get("primary_key", "id")
+        target_mapping = self.mapper.get_entity(
+            target_entity
+        )
+
+        target_node_label = (
+            target_mapping["source"]["node_label"]
+        )
+
+        source_key_column = (
+            mapping
+            .get("ingestion", {})
+            .get("primary_key", "id")
+        )
+
+        target_key_column = (
+            rel_ingestion.get("target_key")
+            or target_mapping
+            .get("ingestion", {})
+            .get("primary_key", "id")
+        )
+
+        batch = []
 
         for row in rows:
-            fk_value = row.get(foreign_key)
-            if fk_value is None:
+            source_id = row.get(
+                source_key_column
+            )
+
+            target_id = row.get(
+                foreign_key
+            )
+
+            if (
+                source_id is None
+                or target_id is None
+            ):
                 continue
 
-            session.run(
-                f"""
-                MATCH (a:{source_node_label} {{_source_id: $source_id}})
-                MATCH (b:{target_node_label} {{_source_id: $target_id}})
-                CREATE (a)-[:{rel_type}]->(b)
-                """,
-                source_id=row.get(source_key_column),
-                target_id=fk_value,
+            batch.append(
+                {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                }
             )
+
+        if not batch:
+            return
+
+        session.run(
+            f"""
+            UNWIND $rows AS row
+
+            MATCH (a:{source_node_label} {{
+                _source_id: row.source_id
+            }})
+
+            MATCH (b:{target_node_label} {{
+                _source_id: row.target_id
+            }})
+
+            MERGE (a)-[:{rel_type}]->(b)
+            """,
+            rows=batch,
+        )
 
     def _create_fulltext_indexes(self, session):
         for entity, mapping in self.mapper.mappings.items():
