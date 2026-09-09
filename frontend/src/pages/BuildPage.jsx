@@ -2016,7 +2016,7 @@ async function startBuild() {
         </Card>
     );
     }
-
+  }
   return (
     <div
       style={{
