@@ -1,10 +1,12 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 import os
+from functools import lru_cache
 
 from app.core.config import (
     SQLITE_DB_PATH,
     MAPPING_DIR,
+    PROJECT_MAPPING_ROOT,
 )
 
 from app.schemas.semantic_query import SemanticQuery
@@ -37,39 +39,50 @@ print(f"[API] Mapping Dir = {MAPPING_DIR}")
 
 
 # ======================================================
-# Runtime Query DB
-# ======================================================
-
-db = Neo4jAdapter(
-    uri=os.environ["NEO4J_URI"],
-    user=os.environ["NEO4J_USER"],
-    password=os.environ["NEO4J_PASSWORD"],
-)
-
-
-# ======================================================
 # Semantic Mapping
 # ======================================================
 
-mapper = SemanticMapper(
-    MAPPING_DIR
-)
+def get_mapper(project_id: str | None = None) -> SemanticMapper:
+    """Load mappings at request time so saved Builder changes take effect."""
+    return SemanticMapper(PROJECT_MAPPING_ROOT / project_id / "mappings" if project_id else MAPPING_DIR)
 
 
 # ======================================================
 # Query Service
 # ======================================================
 
-service = QueryService(
-    db=db,
-    mapper=mapper,
-)
+def required_environment(*names: str) -> dict[str, str]:
+    values = {name: os.getenv(name) for name in names}
+    missing = [name for name, value in values.items() if not value]
+    if missing:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service is not configured; missing: {', '.join(missing)}",
+        )
+    return values  # type: ignore[return-value]
 
 
-nl_graph = NLQueryGraph(
-    mapper=mapper,
-    query_service=service,
-)
+@lru_cache
+def get_db() -> Neo4jAdapter:
+    config = required_environment("NEO4J_URI", "NEO4J_USER", "NEO4J_PASSWORD")
+    return Neo4jAdapter(
+        uri=config["NEO4J_URI"],
+        user=config["NEO4J_USER"],
+        password=config["NEO4J_PASSWORD"],
+    )
+
+
+def get_service(project_id: str | None = None) -> QueryService:
+    return QueryService(db=get_db(), mapper=get_mapper(project_id))
+
+
+def get_nl_graph(project_id: str) -> NLQueryGraph:
+    required_environment("MY_MODEL_BASE_URL", "MY_MODEL_NAME")
+    mapper = get_mapper(project_id)
+    return NLQueryGraph(
+        mapper=mapper,
+        query_service=QueryService(db=get_db(), mapper=mapper), project_id=project_id,
+    )
 
 
 # ======================================================
@@ -79,8 +92,9 @@ nl_graph = NLQueryGraph(
 @router.post("/")
 def query(
     request: SemanticQuery,
+    project_id: str,
 ):
-    return service.execute(request)
+    return get_service(project_id).execute(request, project_id=project_id)
 
 
 # ======================================================
@@ -89,15 +103,33 @@ def query(
 
 class NLQueryRequest(BaseModel):
     question: str
+    project_id: str
+
+class DeactivateNodesRequest(BaseModel):
+    project_id: str
+    entity: str
+    source_ids: list[str | int]
 
 
 @router.post("/ask")
 def ask(
     request: NLQueryRequest,
 ):
-    return nl_graph.run(
+    return get_nl_graph(request.project_id).run(
         request.question
     )
+
+@router.post("/graph/deactivate")
+def deactivate_nodes(request: DeactivateNodesRequest):
+    mapper = get_mapper(request.project_id)
+    label = mapper.get_source(request.entity)["node_label"]
+    get_db().execute_write(
+        f"""MATCH (n:{label} {{ _project_id: $project_id }})
+        WHERE n._source_id IN $source_ids
+        SET n._inactive = true, n._inactive_at = datetime()""",
+        {"project_id": request.project_id, "source_ids": request.source_ids},
+    )
+    return {"status": "deactivated", "count": len(request.source_ids)}
 
 
 # ======================================================
@@ -105,7 +137,9 @@ def ask(
 # ======================================================
 
 @router.get("/graph")
-def get_graph():
+def get_graph(project_id: str):
+
+    mapper = get_mapper(project_id)
 
     nodes = []
     edges = []
@@ -125,6 +159,11 @@ def get_graph():
                         {},
                     ).keys()
                 ),
+                "searchable_properties": [
+                    name
+                    for name, definition in mapping.get("properties", {}).items()
+                    if definition.get("searchable") or definition.get("fulltext")
+                ],
             }
         )
 
@@ -149,8 +188,18 @@ def get_graph():
         "edges": edges,
     }
 
+@router.get("/graph/stats")
+def get_graph_stats(project_id: str):
+    rows = get_db().execute("""
+        MATCH (n { _project_id: $project_id })
+        OPTIONAL MATCH (n)-[r]->()
+        RETURN count(DISTINCT n) AS nodes, count(DISTINCT r) AS edges
+    """, {"project_id": project_id})
+    return rows[0] if rows else {"nodes": 0, "edges": 0}
+
 @router.get("/graph/data")
 def get_graph_data(
+    project_id: str,
     entity: str | None = None,
     limit: int = 100,
 ):
@@ -162,12 +211,13 @@ def get_graph_data(
 
     params = {
         "limit": limit,
+        "project_id": project_id,
     }
 
     if entity:
         query = """
         MATCH (n)
-        WHERE $entity IN labels(n)
+        WHERE $entity IN labels(n) AND n._project_id = $project_id
 
         WITH n
         LIMIT $limit
@@ -214,7 +264,7 @@ def get_graph_data(
 
     else:
         query = """
-        MATCH (n)
+        MATCH (n { _project_id: $project_id })
 
         WITH n
         LIMIT $limit
@@ -257,7 +307,7 @@ def get_graph_data(
             END AS target_properties
         """
 
-    rows = db.execute(
+    rows = get_db().execute(
         query,
         params,
     )
@@ -350,6 +400,12 @@ def start_ingestion(
     background_tasks: BackgroundTasks,
 ):
 
+    if SQLITE_DB_PATH is None:
+        raise HTTPException(
+            status_code=400,
+            detail="SQLITE_DB_PATH must be configured before starting ingestion.",
+        )
+
     job = create_job()
 
     def pipeline_factory(
@@ -357,7 +413,7 @@ def start_ingestion(
     ):
 
         pipeline = IngestionPipeline(
-            mapper=mapper,
+            mapper=get_mapper(),
             neo4j_uri=os.environ["NEO4J_URI"],
             neo4j_user=os.environ["NEO4J_USER"],
             neo4j_password=os.environ["NEO4J_PASSWORD"],

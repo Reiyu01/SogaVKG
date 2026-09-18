@@ -36,7 +36,7 @@ export default function Sidebar() {
       </div>
 
       <NavLink to="/" end style={linkStyle}>
-        知識圖譜
+        專案
       </NavLink>
 
       <NavLink to="/build" style={linkStyle}>

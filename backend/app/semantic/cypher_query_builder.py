@@ -20,7 +20,7 @@ class CypherQueryBuilder:
     def __init__(self, mapper: SemanticMapper):
         self.mapper = mapper
 
-    def build(self, query: SemanticQuery) -> QueryResult:
+    def build(self, query: SemanticQuery, project_id: str | None = None) -> QueryResult:
         entity = query.entity
         self.mapper.get_entity(entity)
 
@@ -50,6 +50,9 @@ class CypherQueryBuilder:
         # WHERE（含全文搜尋）
         # ------------------------------------------------------
         where_clauses = []
+        if project_id:
+            where_clauses.append(f"{var}._project_id = $project_id")
+            params["project_id"] = project_id
 
         for index, filter_item in enumerate(query.filters):
             condition, condition_params, extra_match = self._build_filter(

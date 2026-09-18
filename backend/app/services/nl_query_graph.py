@@ -110,9 +110,10 @@ class NLQueryGraph:
       - 使用者想查資料 -> 模型呼叫工具，走原本的驗證/執行/重試流程
     """
 
-    def __init__(self, mapper: SemanticMapper, query_service: QueryService):
+    def __init__(self, mapper: SemanticMapper, query_service: QueryService, project_id: str | None = None):
         self.mapper = mapper
         self.query_service = query_service
+        self.project_id = project_id
         self.builder = CypherQueryBuilder(mapper)
 
         self.client = OpenAI(
@@ -266,7 +267,7 @@ class NLQueryGraph:
     # ------------------------------------------------------
 
     def _execute_node(self, state: GraphState) -> dict:
-        result = self.query_service.execute(state["semantic_query"])
+        result = self.query_service.execute(state["semantic_query"], project_id=self.project_id)
         return {"result": result}
 
     # ------------------------------------------------------

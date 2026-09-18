@@ -1,9 +1,14 @@
 # app/services/ingestion_job.py
 
-import threading
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
+
+from app.core.config import PLATFORM_STATE_DB_PATH
+from app.repositories.platform_state import PlatformStateRepository
+
+
+repository = PlatformStateRepository(PLATFORM_STATE_DB_PATH)
 
 
 class JobStatus(str, Enum):
@@ -16,13 +21,17 @@ class JobStatus(str, Enum):
 class IngestionJob:
     """記錄一次建置任務的狀態，讓前端可以輪詢查詢進度。"""
 
-    def __init__(self):
-        self.id = str(uuid.uuid4())
-        self.status = JobStatus.PENDING
-        self.logs: list[dict] = []
-        self.error: str | None = None
-        self.started_at = datetime.now(timezone.utc).isoformat()
-        self.finished_at: str | None = None
+    def __init__(self, source_id: str | None = None, project_id: str | None = None, data: dict | None = None):
+        data = data or {}
+        self.id = data.get("id", str(uuid.uuid4()))
+        self.source_id = data.get("source_id", source_id)
+        self.project_id = data.get("project_id", project_id)
+        self.status = JobStatus(data.get("status", JobStatus.PENDING))
+        self.logs: list[dict] = data.get("logs", [])
+        self.error: str | None = data.get("error")
+        self.started_at = data.get("started_at", datetime.now(timezone.utc).isoformat())
+        self.finished_at: str | None = data.get("finished_at")
+        self.result = data.get("result")
 
     def log(self, step: str, message: str):
         self.logs.append({
@@ -30,6 +39,7 @@ class IngestionJob:
             "message": message,
             "time": datetime.now(timezone.utc).isoformat(),
         })
+        repository.update_job(self.to_dict())
 
     def to_dict(self):
         return {
@@ -37,23 +47,23 @@ class IngestionJob:
             "status": self.status,
             "logs": self.logs,
             "error": self.error,
+            "source_id": self.source_id,
+            "project_id": self.project_id,
             "started_at": self.started_at,
             "finished_at": self.finished_at,
+            "result": self.result,
         }
 
 
-# 簡單版：存在記憶體裡（單機開發夠用；正式環境建議換成 Redis 等外部儲存）
-_jobs: dict[str, IngestionJob] = {}
-
-
-def create_job() -> IngestionJob:
-    job = IngestionJob()
-    _jobs[job.id] = job
+def create_job(source_id: str | None = None, project_id: str | None = None) -> IngestionJob:
+    job = IngestionJob(source_id=source_id, project_id=project_id)
+    repository.create_job(job.to_dict())
     return job
 
 
 def get_job(job_id: str) -> IngestionJob | None:
-    return _jobs.get(job_id)
+    data = repository.get_job(job_id)
+    return IngestionJob(data=data) if data else None
 
 def run_ingestion_job(
     job: IngestionJob,
@@ -63,6 +73,7 @@ def run_ingestion_job(
     """在背景執行緒跑建置流程，邊跑邊更新 job 狀態。"""
 
     job.status = JobStatus.RUNNING
+    repository.update_job(job.to_dict())
 
     def on_progress(
         step: str,
@@ -78,7 +89,7 @@ def run_ingestion_job(
             on_progress
         )
 
-        pipeline.run(
+        job.result = pipeline.run(
             reset=reset
         )
 
@@ -96,3 +107,4 @@ def run_ingestion_job(
                 timezone.utc
             ).isoformat()
         )
+        repository.update_job(job.to_dict())

@@ -8,13 +8,10 @@ import {
   useEdgesState,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { apiUrl } from './config';
 
-
-const API_BASE = 'http://163.18.26.230:8000';
-
-const GRAPH_API_URL = `${API_BASE}/query/graph`;
-const DATA_GRAPH_API_URL = `${API_BASE}/query/graph/data`;
-const QUERY_API_URL = `${API_BASE}/query/`;
+const GRAPH_API_URL = apiUrl('/query/graph');
+const QUERY_API_URL = apiUrl('/query/');
 
 
 // ======================================================
@@ -85,7 +82,7 @@ function Spinner() {
 // 側邊面板
 // ======================================================
 
-function DataPanel({ entityId, onClose }) {
+function DataPanel({ entity, projectId, onClose }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -94,22 +91,21 @@ function DataPanel({ entityId, onClose }) {
   const [sortDir, setSortDir] = useState('asc');
 
   const runQuery = useCallback(
-    (searchKeyword) => {
+    (searchKeyword = '') => {
       setLoading(true);
       setError(null);
 
       const body = {
-        entity: entityId,
+        entity: entity.id,
         limit: 50,
       };
 
-      // 有輸入關鍵字時，對所有欄位做簡單 LIKE 過濾（用第一個欄位示範，
-      // 實務上可依 searchable 欄位清單動態組出多個 filter）
-      if (searchKeyword) {
-        body.filters = [{ field: 'name', operator: 'LIKE', value: searchKeyword }];
+      const searchField = entity.searchable_properties?.[0];
+      if (searchKeyword && searchField) {
+        body.filters = [{ field: searchField, operator: 'LIKE', value: searchKeyword }];
       }
 
-      fetch(QUERY_API_URL, {
+      fetch(`${QUERY_API_URL}?project_id=${encodeURIComponent(projectId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -127,7 +123,7 @@ function DataPanel({ entityId, onClose }) {
           setLoading(false);
         });
     },
-    [entityId]
+    [entity, projectId]
   );
 
   useEffect(() => {
@@ -208,7 +204,7 @@ function DataPanel({ entityId, onClose }) {
             marginBottom: '12px',
           }}
         >
-          <h3 style={{ margin: 0, fontSize: '18px' }}>{entityId}</h3>
+          <h3 style={{ margin: 0, fontSize: '18px' }}>{entity.label}</h3>
           <button
             onClick={onClose}
             style={{
@@ -226,12 +222,14 @@ function DataPanel({ entityId, onClose }) {
 
         <input
           type="text"
-          placeholder="輸入關鍵字搜尋 name 欄位..."
+          placeholder={
+            entity.searchable_properties?.length
+              ? `輸入關鍵字搜尋 ${entity.searchable_properties[0]} 欄位...`
+              : '此實體未設定可搜尋欄位'
+          }
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') runQuery(keyword);
-          }}
+          disabled={!entity.searchable_properties?.length}
           style={{
             width: '100%',
             padding: '8px 10px',
@@ -328,15 +326,16 @@ function DataPanel({ entityId, onClose }) {
 // 主元件
 // ======================================================
 
-export default function SemanticGraph() {
+export default function SemanticGraph({ projectId }) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedEntity, setSelectedEntity] = useState(null);
+  const [schemaNodes, setSchemaNodes] = useState([]);
 
   useEffect(() => {
-    fetch(GRAPH_API_URL)
+    fetch(`${GRAPH_API_URL}?project_id=${encodeURIComponent(projectId)}`)
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
@@ -355,13 +354,14 @@ export default function SemanticGraph() {
 
         setNodes(graphNodes);
         setEdges(graphEdges);
+        setSchemaNodes(data.nodes);
         setLoading(false);
       })
       .catch((err) => {
         setError(err.message);
         setLoading(false);
       });
-  }, [setNodes, setEdges]);
+  }, [projectId, setNodes, setEdges]);
 
   const onNodeClick = useCallback(
     (event, node) => {
@@ -412,7 +412,11 @@ export default function SemanticGraph() {
       </ReactFlow>
 
       {selectedEntity && (
-        <DataPanel entityId={selectedEntity} onClose={() => setSelectedEntity(null)} />
+        <DataPanel
+          entity={schemaNodes.find((entity) => entity.id === selectedEntity)}
+          projectId={projectId}
+          onClose={() => setSelectedEntity(null)}
+        />
       )}
     </div>
   );

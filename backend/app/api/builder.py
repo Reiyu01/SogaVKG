@@ -3,10 +3,14 @@ from pydantic import BaseModel, Field
 from pathlib import Path
 import os
 import sqlite3
+import uuid
+import json
 
 from app.core.config import (
     SQLITE_DB_PATH,
     MAPPING_DIR,
+    PROJECT_MAPPING_ROOT,
+    PLATFORM_STATE_DB_PATH,
 )
 
 from app.semantic.mapper import SemanticMapper
@@ -22,6 +26,7 @@ from app.services.ingestion_job import (
 )
 from typing import Any
 from app.services.mapping_service import MappingService
+from app.repositories.platform_state import PlatformStateRepository
 
 router = APIRouter(
     prefix="/builder",
@@ -31,6 +36,7 @@ router = APIRouter(
 mapping_service = MappingService(
     MAPPING_DIR
 )
+state_repository = PlatformStateRepository(PLATFORM_STATE_DB_PATH)
 # ======================================================
 # Request Models
 # ======================================================
@@ -41,8 +47,23 @@ class SourceSchemaRequest(BaseModel):
 
 class BuildRequest(BaseModel):
     reset: bool = True
+    mode: str = "full"
+    source_path: str | None = None
+    source_id: str | None = None
+    project_id: str | None = None
+
+class SourceProfileRequest(BaseModel):
+    project_id: str | None = None
+    name: str = Field(min_length=1, max_length=120)
+    source_type: str = "sqlite"
+    config: dict[str, Any]
+
+class ProjectRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
 
 class MappingRequest(BaseModel):
+    project_id: str
     entity: str
     label: str | None = None
     source: dict[str, Any]
@@ -54,7 +75,13 @@ class MappingRequest(BaseModel):
 # Helpers
 # ======================================================
 
-def get_mapper() -> SemanticMapper:
+def project_mapping_dir(project_id: str) -> Path:
+    if state_repository.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return PROJECT_MAPPING_ROOT / project_id / "mappings"
+
+
+def get_mapper(project_id: str | None = None) -> SemanticMapper:
     """
     每次重新建立 mapper。
 
@@ -64,7 +91,11 @@ def get_mapper() -> SemanticMapper:
     如果繼續使用舊 mapper，
     就不會看到新的 mapping。
     """
-    return SemanticMapper(MAPPING_DIR)
+    return SemanticMapper(project_mapping_dir(project_id) if project_id else MAPPING_DIR)
+
+
+def get_mapping_service(project_id: str) -> MappingService:
+    return MappingService(project_mapping_dir(project_id))
 
 
 def resolve_sqlite_path(
@@ -77,7 +108,12 @@ def resolve_sqlite_path(
         if not db_path.is_absolute():
             db_path = Path.cwd() / db_path
     else:
-        db_path = Path(SQLITE_DB_PATH)
+        if SQLITE_DB_PATH is None:
+            raise HTTPException(
+                status_code=400,
+                detail="SQLite path is required. Provide it in the request or SQLITE_DB_PATH.",
+            )
+        db_path = SQLITE_DB_PATH
 
     db_path = db_path.resolve()
 
@@ -90,6 +126,19 @@ def resolve_sqlite_path(
     return db_path
 
 
+def resolve_source_path(request: BuildRequest) -> Path:
+    if request.source_id:
+        source = state_repository.get_source(request.source_id)
+        if source is None:
+            raise HTTPException(status_code=404, detail="Source profile not found")
+        if not source["active"]:
+            raise HTTPException(status_code=400, detail="Source profile is disabled")
+        if source["source_type"] != "sqlite":
+            raise HTTPException(status_code=400, detail="Only sqlite sources are supported for builds")
+        return resolve_sqlite_path(source["config"].get("path"))
+    return resolve_sqlite_path(request.source_path)
+
+
 # ======================================================
 # Health
 # ======================================================
@@ -100,7 +149,7 @@ def builder_health():
     return {
         "status": "ok",
         "mapping_dir": str(MAPPING_DIR),
-        "sqlite_db": str(SQLITE_DB_PATH),
+        "sqlite_db": str(SQLITE_DB_PATH) if SQLITE_DB_PATH else None,
     }
 
 
@@ -236,10 +285,153 @@ def get_source_schema(
 # Existing Semantic Mappings
 # ======================================================
 
-@router.get("/mappings")
-def get_mappings():
+@router.get("/projects")
+def list_projects():
+    return {"projects": state_repository.list_projects()}
 
-    mapper = get_mapper()
+@router.post("/projects")
+def create_project(request: ProjectRequest):
+    return state_repository.create_project({"id": str(uuid.uuid4()), "name": request.name, "description": request.description})
+
+@router.get("/projects/{project_id}/overview")
+def project_overview(project_id: str):
+    project = state_repository.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        entities = get_mapper(project_id).mappings
+        entity_count = len(entities)
+        relation_count = sum(len(item.get("relations", {})) for item in entities.values())
+    except FileNotFoundError:
+        entities = {}
+        entity_count = relation_count = 0
+    latest_version = state_repository.latest_mapping_version(project_id)
+    latest_snapshot = state_repository.get_mapping_version(project_id, latest_version["version"]) if latest_version else None
+    draft_mappings = list(entities.values()) if entity_count else []
+    draft_status = "no_draft" if not draft_mappings else "unpublished" if not latest_snapshot or json.dumps(draft_mappings, sort_keys=True) != json.dumps(latest_snapshot["mappings"], sort_keys=True) else "published"
+    return {"project": project, "source_count": len(state_repository.list_sources(project_id)), "entity_count": entity_count, "relation_count": relation_count, "latest_mapping_version": latest_version, "draft_status": draft_status, "latest_job": state_repository.latest_job(project_id), "builds": state_repository.list_jobs(project_id)}
+
+@router.get("/projects/{project_id}/mapping-versions")
+def mapping_versions(project_id: str):
+    if state_repository.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"versions": state_repository.list_mapping_versions(project_id)}
+
+@router.get("/projects/{project_id}/mapping-versions/{version}")
+def mapping_version(project_id: str, version: int):
+    result = state_repository.get_mapping_version(project_id, version)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Mapping version not found")
+    return result
+
+@router.post("/projects/{project_id}/validate-mappings")
+def validate_mappings(project_id: str, request: BuildRequest):
+    db_path = resolve_source_path(request)
+    mapper = get_mapper(project_id)
+    errors: list[str] = []
+    warnings: list[str] = []
+    with sqlite3.connect(db_path) as connection:
+        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        for entity, mapping in mapper.mappings.items():
+            ingestion = mapping.get("ingestion", {})
+            table = ingestion.get("source_table")
+            if not table or table not in tables:
+                errors.append(f"{entity}: source_table '{table}' does not exist")
+                continue
+            columns = {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
+            primary_key = ingestion.get("primary_key", "id")
+            if primary_key not in columns:
+                errors.append(f"{entity}: primary_key '{primary_key}' does not exist in {table}")
+            for name, definition in mapping.get("properties", {}).items():
+                if definition.get("column") not in columns:
+                    errors.append(f"{entity}.{name}: column '{definition.get('column')}' does not exist")
+            for name, relation in mapping.get("relations", {}).items():
+                target = relation.get("target", {}).get("entity")
+                foreign_key = relation.get("ingestion", {}).get("foreign_key")
+                if target not in mapper.mappings:
+                    errors.append(f"{entity}.{name}: target entity '{target}' does not exist")
+                if foreign_key not in columns:
+                    errors.append(f"{entity}.{name}: foreign_key '{foreign_key}' does not exist")
+            if not mapping.get("properties"):
+                warnings.append(f"{entity}: no properties are mapped")
+    return {"valid": not errors, "errors": errors, "warnings": warnings}
+
+@router.post("/projects/{project_id}/build-preview")
+def build_preview(project_id: str, request: BuildRequest):
+    db_path = resolve_source_path(request)
+    mapper = get_mapper(project_id)
+    preview = []
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        for entity, mapping in mapper.mappings.items():
+            ingestion = mapping.get("ingestion", {})
+            table = ingestion.get("source_table")
+            primary_key = ingestion.get("primary_key", "id")
+            rows = [dict(row) for row in connection.execute(f'SELECT * FROM "{table}"')]
+            valid_rows = [row for row in rows if row.get(primary_key) is not None]
+            missing_primary_key_samples = [row for row in rows if row.get(primary_key) is None][:20]
+            relations = []
+            for name, relation in mapping.get("relations", {}).items():
+                foreign_key = relation.get("ingestion", {}).get("foreign_key")
+                target = relation.get("target", {}).get("entity")
+                target_mapping = mapper.get_entity(target)
+                target_table = target_mapping.get("ingestion", {}).get("source_table")
+                target_key = relation.get("ingestion", {}).get("target_key") or target_mapping.get("ingestion", {}).get("primary_key", "id")
+                target_ids = {row[0] for row in connection.execute(f'SELECT "{target_key}" FROM "{target_table}"')}
+                candidates = [row for row in valid_rows if row.get(foreign_key) is not None]
+                matched = sum(row.get(foreign_key) in target_ids for row in candidates)
+                unmatched_samples = [{"foreign_key": row.get(foreign_key), "primary_key": row.get(primary_key)} for row in candidates if row.get(foreign_key) not in target_ids][:20]
+                relations.append({"name": name, "candidates": len(candidates), "matched": matched, "unmatched": len(candidates) - matched, "unmatched_samples": unmatched_samples})
+            preview.append({"entity": entity, "source_table": table, "rows": len(rows), "nodes": len(valid_rows), "skipped_missing_primary_key": len(rows) - len(valid_rows), "missing_primary_key_samples": missing_primary_key_samples, "relations": relations})
+    return {"entities": preview}
+
+@router.post("/projects/{project_id}/mapping-versions/{version}/restore")
+def restore_mapping_version(project_id: str, version: int):
+    snapshot = state_repository.get_mapping_version(project_id, version)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Mapping version not found")
+    get_mapping_service(project_id).replace_all(snapshot["mappings"])
+    return {"status": "restored_to_draft", "project_id": project_id, "version": version, "mapping_count": len(snapshot["mappings"])}
+
+@router.get("/sources")
+def list_sources(project_id: str | None = None):
+    return {"sources": state_repository.list_sources(project_id)}
+
+
+@router.post("/sources")
+def save_source(request: SourceProfileRequest):
+    if request.project_id and state_repository.get_project(request.project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if request.source_type != "sqlite":
+        raise HTTPException(status_code=400, detail="Only sqlite sources are currently supported")
+
+    path = resolve_sqlite_path(request.config.get("path"))
+    return state_repository.save_source({
+        "id": str(uuid.uuid4()),
+        "project_id": request.project_id,
+        "name": request.name,
+        "source_type": request.source_type,
+        "config": {"path": str(path)},
+    })
+
+
+@router.delete("/sources/{source_id}")
+def delete_source(source_id: str):
+    if not state_repository.delete_source(source_id):
+        raise HTTPException(status_code=404, detail="Source profile not found")
+    return {"status": "deleted", "id": source_id}
+
+@router.post("/sources/{source_id}/active")
+def set_source_active(source_id: str, active: bool):
+    source = state_repository.set_source_active(source_id, active)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Source profile not found")
+    return source
+
+@router.get("/mappings")
+def get_mappings(project_id: str):
+
+    mapper = get_mapper(project_id)
 
     result = []
 
@@ -364,7 +556,13 @@ def start_build(
     background_tasks: BackgroundTasks,
 ):
 
-    job = create_job()
+    if not request.project_id:
+        raise HTTPException(status_code=400, detail="project_id is required")
+    db_path = resolve_source_path(request)
+    mapper = get_mapper(request.project_id)
+    version = state_repository.create_mapping_version(request.project_id, list(mapper.mappings.values()))
+
+    job = create_job(source_id=request.source_id, project_id=request.project_id)
 
     def pipeline_factory(
         on_progress,
@@ -374,20 +572,21 @@ def start_build(
         #
         # 未來前端儲存 mapping 後，
         # build 一定要吃最新 mapping。
-        mapper = get_mapper()
+        mapper = get_mapper(request.project_id)
 
         pipeline = IngestionPipeline(
             mapper=mapper,
             neo4j_uri=os.environ["NEO4J_URI"],
             neo4j_user=os.environ["NEO4J_USER"],
             neo4j_password=os.environ["NEO4J_PASSWORD"],
+            project_id=request.project_id,
             on_progress=on_progress,
         )
 
         pipeline.register_reader(
             "sqlite",
             SQLiteSourceReader(
-                str(SQLITE_DB_PATH)
+                str(db_path)
             ),
         )
 
@@ -397,12 +596,13 @@ def start_build(
         run_ingestion_job,
         job,
         pipeline_factory,
-        request.reset,
+        request.mode == "full",
     )
 
     return {
         "job_id": job.id,
         "status": job.status,
+        "mapping_version": version,
     }
 
 
@@ -430,8 +630,9 @@ def get_build_status(
 @router.get("/mapping/{entity}")
 def get_mapping(
     entity: str,
+    project_id: str,
 ):
-    mapping = mapping_service.get_mapping(
+    mapping = get_mapping_service(project_id).get_mapping(
         entity
     )
 
@@ -451,7 +652,7 @@ def save_mapping(
     try:
         mapping = request.model_dump()
 
-        file_path = mapping_service.save_mapping(
+        file_path = get_mapping_service(request.project_id).save_mapping(
             mapping
         )
 

@@ -34,10 +34,11 @@ class QueryService:
     def execute(
         self,
         query: SemanticQuery,
+        project_id: str | None = None,
     ):
 
         query_result = (
-            self.builder.build(query)
+            self.builder.build(query, project_id=project_id)
         )
 
         rows = self.db.execute(query_result.cypher, query_result.params) 

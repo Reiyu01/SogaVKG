@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
+import { apiUrl } from '../config';
 
-const ASK_API_URL = 'http://127.0.0.1:8000/query/ask';
+const ASK_API_URL = apiUrl('/query/ask');
 
 function ResultTable({ rows }) {
   const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
@@ -206,7 +207,7 @@ function AssistantBubble({ item }) {
 //   );
 // }
 
-export default function AskPage() {
+export default function AskPage({ projectId }) {
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState([]);
 
@@ -232,7 +233,7 @@ export default function AskPage() {
       const res = await fetch(ASK_API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q }),
+        body: JSON.stringify({ question: q, project_id: projectId }),
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

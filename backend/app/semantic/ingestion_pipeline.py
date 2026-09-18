@@ -35,6 +35,7 @@ class IngestionPipeline:
         neo4j_uri: str,
         neo4j_user: str,
         neo4j_password: str,
+        project_id: str | None = None,
         on_progress: Callable[[str, str], None] | None = None,
     ):
         """
@@ -42,6 +43,7 @@ class IngestionPipeline:
         讓外部（例如 IngestionJob）可以記錄目前進度。
         """
         self.mapper = mapper
+        self.project_id = project_id
         self.driver = GraphDatabase.driver(neo4j_uri, auth=(neo4j_user, neo4j_password))
         self.readers: dict[str, SourceReader] = {}
         self.on_progress = on_progress or (lambda step, msg: None)
@@ -50,6 +52,7 @@ class IngestionPipeline:
         self.readers[source_type] = reader
 
     def run(self, reset: bool = True):
+        summary = {"mode": "full" if reset else "incremental", "entities": [], "relations": []}
         with self.driver.session() as session:
             if reset:
                 self.on_progress("reset", "清空舊資料中...")
@@ -72,7 +75,17 @@ class IngestionPipeline:
                 rows = reader.read(ingestion_config)
                 entity_rows[entity] = rows
 
-                self._create_nodes(session, entity, mapping, rows)
+                primary_key = mapping.get("ingestion", {}).get("primary_key", "id")
+                source_ids = {row.get(primary_key) for row in rows if row.get(primary_key) is not None}
+                node_label = mapping["source"]["node_label"]
+                graph_ids = {record["source_id"] for record in session.run(
+                    f"MATCH (n:{node_label} {{ _project_id: $project_id }}) RETURN n._source_id AS source_id",
+                    project_id=self.project_id,
+                )}
+                deletion_candidates = sorted(graph_ids - source_ids) if not reset else []
+
+                node_changes = self._create_nodes(session, entity, mapping, rows)
+                summary["entities"].append({"entity": entity, "processed": len(rows), "skipped_missing_primary_key": sum(row.get(primary_key) is None for row in rows), "deletion_candidates": len(deletion_candidates), "deletion_candidate_ids": deletion_candidates[:20], **node_changes})
                 self.on_progress("nodes", f"[{i}/{total_entities}] {entity}：建立 {len(rows)} 個節點")
 
             for entity, mapping in self.mapper.mappings.items():
@@ -86,10 +99,12 @@ class IngestionPipeline:
                     if not rel_ingestion:
                         continue
                     self._create_relationships(session, entity, mapping, relation, rows)
+                    summary["relations"].append({"entity": entity, "relation": rel_name, "processed": len(rows)})
                     self.on_progress("relations", f"{entity}.{rel_name} 關係建立完成")
 
             self._create_fulltext_indexes(session)
             self.on_progress("done", "建置完成")
+        return summary
 
     def _create_nodes(
         self,
@@ -135,6 +150,8 @@ class IngestionPipeline:
             }
 
             props["_source_id"] = source_id
+            if self.project_id:
+                props["_project_id"] = self.project_id
 
             batch.append(
                 {
@@ -144,20 +161,39 @@ class IngestionPipeline:
             )
 
         if not batch:
-            return
+            return {"created": 0, "updated": 0, "unchanged": 0}
+
+        existing_rows = session.run(
+            f"""MATCH (n:{node_label} {{ _project_id: $project_id }})
+            WHERE n._source_id IN $source_ids
+            RETURN n._source_id AS source_id, properties(n) AS props""",
+            source_ids=[item["source_id"] for item in batch], project_id=self.project_id,
+        )
+        existing = {row["source_id"]: row["props"] for row in existing_rows}
+        created = updated = unchanged = 0
+        for item in batch:
+            old = existing.get(item["source_id"])
+            if old is None:
+                created += 1
+            elif any(old.get(key) != value for key, value in item["props"].items() if not key.startswith("_")):
+                updated += 1
+            else:
+                unchanged += 1
 
         session.run(
             f"""
             UNWIND $rows AS item
 
             MERGE (n:{node_label} {{
-                _source_id: item.source_id
+                _source_id: item.source_id,
+                _project_id: $project_id
             }})
 
             SET n += item.props
             """,
-            rows=batch,
+            rows=batch, project_id=self.project_id,
         )
+        return {"created": created, "updated": updated, "unchanged": unchanged}
     def _create_relationships(
         self,
         session,
@@ -225,20 +261,26 @@ class IngestionPipeline:
             return
 
         session.run(
+            f"""MATCH (a:{source_node_label} {{ _project_id: $project_id }})-[r:{rel_type}]->()
+            WHERE a._source_id IN $source_ids DELETE r""",
+            source_ids=[item["source_id"] for item in batch], project_id=self.project_id,
+        )
+
+        session.run(
             f"""
             UNWIND $rows AS row
 
             MATCH (a:{source_node_label} {{
-                _source_id: row.source_id
+                _source_id: row.source_id, _project_id: $project_id
             }})
 
             MATCH (b:{target_node_label} {{
-                _source_id: row.target_id
+                _source_id: row.target_id, _project_id: $project_id
             }})
 
             MERGE (a)-[:{rel_type}]->(b)
             """,
-            rows=batch,
+            rows=batch, project_id=self.project_id,
         )
 
     def _create_fulltext_indexes(self, session):

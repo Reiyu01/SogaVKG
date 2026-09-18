@@ -8,14 +8,20 @@ app = FastAPI(
     title="Laboratory Data Platform",
     version="0.1.0",
 )
+import os
+
 from fastapi.middleware.cors import CORSMiddleware
+
+
+def configured_origins() -> list[str]:
+    """Read allowed browser origins from environment instead of source code."""
+    value = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+    return [origin.strip() for origin in value.split(",") if origin.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://163.18.26.230:5173",
-    ],
+    allow_origins=configured_origins(),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -26,7 +32,7 @@ app.include_router(builder_router)
 
 @app.get("/health")
 def health():
-
     return {
-        "status": "ok"
+        "status": "ok",
+        "service": "knowledge-graph-platform",
     }

@@ -89,3 +89,10 @@ class MappingService:
         file_path.unlink()
 
         return True
+
+    def replace_all(self, mappings: list[dict[str, Any]]) -> None:
+        """Replace the editable draft with an immutable version's contents."""
+        for file_path in self.mapping_dir.glob("*.yaml"):
+            file_path.unlink()
+        for mapping in mappings:
+            self.save_mapping(mapping)

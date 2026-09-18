@@ -4,4 +4,5 @@ venv/
 ENV/
 env/
 data/raw/*.xlsx
+backend/data/platform_state.db
 .env

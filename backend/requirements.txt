@@ -4,6 +4,7 @@ sqlalchemy
 pandas 
 openpyxl 
 pydantic-settings
+python-dotenv
 pyyaml
 openai
 langgraph

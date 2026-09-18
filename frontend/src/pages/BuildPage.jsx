@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-
-const API_BASE = 'http://163.18.26.230:8000';
+import { useNavigate } from 'react-router-dom';
+import { apiUrl } from '../config';
 
 function toPascalCase(value) {
   return value
@@ -87,12 +87,18 @@ function Input({ label, value, onChange, disabled = false }) {
   );
 }
 
-export default function BuildPage() {
+export default function BuildPage({ projectId: fixedProjectId }) {
+  const navigate = useNavigate();
   const [step, setStep] = useState(0);
 
-  const [knowledgeName, setKnowledgeName] = useState('實驗室知識庫');
+  const [knowledgeName, setKnowledgeName] = useState('未命名知識圖譜');
   const [sourceType, setSourceType] = useState('sqlite');
-  const [sourcePath, setSourcePath] = useState('backend/data/lab.db');
+  const [sourcePath, setSourcePath] = useState('');
+  const [sourceId, setSourceId] = useState(null);
+  const [sources, setSources] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [projectId, setProjectId] = useState(fixedProjectId || null);
+  const [sourceSaving, setSourceSaving] = useState(false);
   const [schema, setSchema] = useState(null);
   const [schemaLoading, setSchemaLoading] = useState(false);
   const [schemaError, setSchemaError] = useState(null);
@@ -103,6 +109,57 @@ export default function BuildPage() {
   const [jobId, setJobId] = useState(null);
   const [job, setJob] = useState(null);
   const [buildError, setBuildError] = useState(null);
+  const [buildMode, setBuildMode] = useState('full');
+  const [validation, setValidation] = useState(null);
+  const [preview, setPreview] = useState(null);
+
+  useEffect(() => {
+    fetch(apiUrl('/builder/projects'))
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((data) => setProjects(data.projects))
+      .catch(() => setProjects([]));
+  }, []);
+
+  useEffect(() => {
+    if (!projectId) {
+      setSources([]);
+      return;
+    }
+    fetch(apiUrl(`/builder/sources?project_id=${encodeURIComponent(projectId)}`))
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`HTTP ${res.status}`))))
+      .then((data) => setSources(data.sources))
+      .catch(() => setSources([]));
+  }, [projectId]);
+
+  async function saveSourceProfile() {
+    if (!sourcePath.trim()) {
+      setSchemaError('請先輸入 SQLite Path 才能儲存資料來源。');
+      return;
+    }
+    setSourceSaving(true);
+    setSchemaError(null);
+    try {
+      const res = await fetch(apiUrl('/builder/sources'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: knowledgeName.trim() || '未命名資料來源',
+          project_id: projectId,
+          source_type: sourceType,
+          config: { path: sourcePath },
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const source = await res.json();
+      setSources((items) => [source, ...items.filter((item) => item.id !== source.id)]);
+      setSourceId(source.id);
+      setSourcePath(source.config.path);
+    } catch (err) {
+      setSchemaError(err.message);
+    } finally {
+      setSourceSaving(false);
+    }
+  }
 
     async function loadSchema() {
     setSchemaLoading(true);
@@ -110,7 +167,7 @@ export default function BuildPage() {
 
     try {
         const res = await fetch(
-        `${API_BASE}/builder/source/schema`,
+        apiUrl('/builder/source/schema'),
         {
             method: 'POST',
             headers: {
@@ -212,7 +269,7 @@ export default function BuildPage() {
     const timer = setInterval(async () => {
         try {
         const res = await fetch(
-            `${API_BASE}/builder/build/${jobId}`
+            apiUrl(`/builder/build/${jobId}`)
         );
 
         if (!res.ok) {
@@ -232,6 +289,9 @@ export default function BuildPage() {
             result.status === 'failed'
         ) {
             clearInterval(timer);
+            if (result.status === 'done' && fixedProjectId) {
+              navigate(`/projects/${fixedProjectId}/graph`);
+            }
         }
         } catch (err) {
         setBuildError(err.message);
@@ -241,14 +301,33 @@ export default function BuildPage() {
     }, 1200);
 
     return () => clearInterval(timer);
-    }, [jobId]);
+    }, [jobId, fixedProjectId, navigate]);
 
 async function startBuild() {
   setBuildError(null);
+  setValidation(null);
+  setPreview(null);
   setJob(null);
   setJobId(null);
 
   try {
+    const validationRes = await fetch(apiUrl(`/builder/projects/${projectId}/validate-mappings`), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_path: sourcePath || null, source_id: sourceId, project_id: projectId }),
+    });
+    const validationResult = await validationRes.json();
+    setValidation(validationResult);
+    if (!validationRes.ok || !validationResult.valid) {
+      throw new Error('Mapping 驗證失敗，請先修正錯誤。');
+    }
+    const previewRes = await fetch(apiUrl(`/builder/projects/${projectId}/build-preview`), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_path: sourcePath || null, source_id: sourceId, project_id: projectId }),
+    });
+    if (!previewRes.ok) throw new Error(await previewRes.text());
+    const previewResult = await previewRes.json();
+    setPreview(previewResult);
+    if (!window.confirm(`預覽完成：將建立 ${previewResult.entities.reduce((sum, item) => sum + item.nodes, 0)} 個節點。是否繼續？`)) return;
     const selectedEntities = entities.filter(
       (entity) =>
         selectedTables.includes(
@@ -268,6 +347,7 @@ async function startBuild() {
 
     for (const entity of selectedEntities) {
       const mapping = {
+        project_id: projectId,
         entity: entity.entity,
 
         label: entity.label,
@@ -340,7 +420,7 @@ async function startBuild() {
       };
 
       const mappingRes = await fetch(
-        `${API_BASE}/builder/mapping`,
+        apiUrl('/builder/mapping'),
         {
           method: 'POST',
 
@@ -370,9 +450,18 @@ async function startBuild() {
     // ==========================================
 
     const buildRes = await fetch(
-      `${API_BASE}/builder/build`,
+      apiUrl('/builder/build'),
       {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          source_path: sourcePath || null,
+          source_id: sourceId,
+          project_id: projectId,
+          mode: buildMode,
+        }),
       }
     );
 
@@ -418,6 +507,23 @@ async function startBuild() {
             value={knowledgeName}
             onChange={setKnowledgeName}
             />
+
+            {!fixedProjectId && <label style={{ display: 'block', marginBottom: 14, fontSize: 13, color: '#555' }}>
+              專案
+              <select value={projectId || ''} onChange={(event) => { setProjectId(event.target.value || null); setSourceId(null); }} style={{ display: 'block', width: '100%', marginTop: 6, padding: '9px 11px', border: '1px solid #d8d8d8', borderRadius: 7 }}>
+                <option value="">請先選擇專案</option>
+                {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+              </select>
+            </label>}
+            <button onClick={async () => {
+              const name = window.prompt('輸入新專案名稱');
+              if (!name?.trim()) return;
+              const response = await fetch(apiUrl('/builder/projects'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim() }) });
+              if (!response.ok) { setSchemaError(await response.text()); return; }
+              const project = await response.json();
+              setProjects((items) => [project, ...items]);
+              setProjectId(project.id);
+            }} style={{ marginTop: -8, marginBottom: 16, border: '1px solid #185fa5', borderRadius: 8, padding: '8px 12px', color: '#185fa5', background: '#fff', cursor: 'pointer' }}>建立新專案</button>
 
             <div
             style={{
@@ -473,11 +579,43 @@ async function startBuild() {
 
             {/* SQLite 設定 */}
             {sourceType === 'sqlite' && (
+            <>
+            {sources.length > 0 && (
+            <label style={{ display: 'block', marginBottom: 14, fontSize: 13, color: '#555' }}>
+                已儲存資料來源
+                <select
+                value={sourceId || ''}
+                onChange={(event) => {
+                    const source = sources.find((item) => item.id === event.target.value);
+                    setSourceId(source?.id || null);
+                    if (source) {
+                    setSourceType(source.source_type);
+                    setSourcePath(source.config.path || '');
+                    }
+                }}
+                style={{ display: 'block', width: '100%', marginTop: 6, padding: '9px 11px', border: '1px solid #d8d8d8', borderRadius: 7 }}
+                >
+                <option value="">使用未儲存的路徑</option>
+                {sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
+                </select>
+            </label>
+            )}
             <Input
                 label="SQLite Path"
                 value={sourcePath}
-                onChange={setSourcePath}
+                onChange={(value) => {
+                setSourcePath(value);
+                setSourceId(null);
+                }}
             />
+            <button
+                onClick={saveSourceProfile}
+                disabled={sourceSaving || !sourcePath.trim()}
+                style={{ marginTop: -4, marginBottom: 16, border: '1px solid #185fa5', borderRadius: 8, padding: '8px 12px', color: '#185fa5', background: '#fff', cursor: 'pointer' }}
+            >
+                {sourceSaving ? '儲存中...' : '儲存為資料來源'}
+            </button>
+            </>
             )}
 
             {/* 尚未支援的資料來源 */}
@@ -1859,9 +1997,18 @@ async function startBuild() {
             Source：{sourceType}
             </div>
 
+            <div style={{ fontSize: 13, marginBottom: 4 }}>
+            模式：{buildMode === 'full' ? '全量重建' : '增量同步'}
+            </div>
+
             <div style={{ fontSize: 13 }}>
             Entities：{selectedEntities.length}
             </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 12, marginBottom: 16, fontSize: 13 }}>
+          <label><input type="radio" checked={buildMode === 'full'} onChange={() => setBuildMode('full')} /> 全量重建</label>
+          <label><input type="radio" checked={buildMode === 'incremental'} onChange={() => setBuildMode('incremental')} /> 增量同步</label>
         </div>
 
         <div
@@ -1918,6 +2065,14 @@ async function startBuild() {
             {buildError}
             </div>
         )}
+        {validation && (
+          <div style={{ marginBottom: 16, padding: 12, borderRadius: 8, background: validation.valid ? '#eaf7ef' : '#faece7', color: validation.valid ? '#0f6e56' : '#993c1d', fontSize: 13 }}>
+            <strong>{validation.valid ? '✓ Mapping 驗證通過' : 'Mapping 驗證失敗'}</strong>
+            {validation.errors?.map((item) => <div key={item}>• {item}</div>)}
+            {validation.warnings?.map((item) => <div key={item} style={{ color: '#8a5a00' }}>⚠ {item}</div>)}
+          </div>
+        )}
+        {preview && <div style={{ marginBottom: 16, padding: 12, border: '1px solid #d8d8d8', borderRadius: 8, fontSize: 13 }}><strong>建置預覽</strong>{preview.entities.map((item) => <div key={item.entity} style={{ marginTop: 8 }}><b>{item.entity}</b>：{item.nodes} 節點，跳過 {item.skipped_missing_primary_key}；{item.relations.map((relation) => <span key={relation.name}> {relation.name} {relation.matched}/{relation.candidates}（未匹配 {relation.unmatched}）</span>)}{(item.missing_primary_key_samples.length > 0 || item.relations.some((relation) => relation.unmatched_samples.length)) && <details><summary>查看資料品質問題樣本</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify({ missing_primary_key: item.missing_primary_key_samples, unmatched_relations: item.relations.filter((relation) => relation.unmatched_samples.length).map((relation) => ({ relation: relation.name, rows: relation.unmatched_samples })) }, null, 2)}</pre></details>}</div>)}</div>}
 
         {job && (
             <>
@@ -1981,6 +2136,14 @@ async function startBuild() {
                     </div>
                     )
                 )}
+                </div>
+            )}
+
+            {job.status === 'done' && job.result && (
+                <div style={{ marginTop: 14, padding: 14, border: '1px solid #b7dfc5', borderRadius: 8, fontSize: 13 }}>
+                    <strong>同步報告（{job.result.mode === 'incremental' ? '增量同步' : '全量重建'}）</strong>
+                    {job.result.entities?.map((item) => <div key={item.entity} style={{ marginTop: 7 }}>{item.entity}：新增 {item.created}，更新 {item.updated}，未變更 {item.unchanged}，跳過 {item.skipped_missing_primary_key}{item.deletion_candidates ? `，清理候選 ${item.deletion_candidates}` : ''}</div>)}
+                    {job.result.relations?.map((item, index) => <div key={`${item.entity}-${item.relation}-${index}`} style={{ marginTop: 4, color: '#555' }}>{item.entity}.{item.relation}：處理 {item.processed} 筆</div>)}
                 </div>
             )}
 

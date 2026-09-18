@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
+import { apiUrl } from '../config';
 
-const INGEST_START_URL = 'http://127.0.0.1:8000/query/ingest';
-const INGEST_STATUS_URL = (jobId) => `http://127.0.0.1:8000/query/ingest/${jobId}`;
+const INGEST_START_URL = apiUrl('/query/ingest');
+const INGEST_STATUS_URL = (jobId) => apiUrl(`/query/ingest/${jobId}`);
 
 export default function IngestPage() {
   const [status, setStatus] = useState('idle'); // idle | running | done | failed
