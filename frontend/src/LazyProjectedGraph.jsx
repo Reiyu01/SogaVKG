@@ -28,13 +28,19 @@ export default function LazyProjectedGraph({ projectId }) {
   const [error, setError] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [activeLayout, setActiveLayout] = useState('network');
+  const [flow, setFlow] = useState(null);
   const changeLayout = (kind) => { setActiveLayout(kind); setNodes((current) => layout(kind, current, edges, selectedId)); };
+  useEffect(() => {
+    if (!flow || nodes.length === 0) return;
+    const frame = requestAnimationFrame(() => flow.fitView({ padding: 0.18, duration: 260, maxZoom: 1.1 }));
+    return () => cancelAnimationFrame(frame);
+  }, [edges.length, flow, nodes.length]);
   const addGraph = useCallback((graph, parentId = null, relation = 'records') => {
     setNodes((old) => {
       const known = new Set(old.map((node) => node.id));
       const additions = graph.nodes.filter((node) => !known.has(node.id)).map((node, index) => ({
         id: node.id, position: { x: parentId ? 260 + (old.length % 4) * 230 : 100, y: parentId ? 100 + (old.length + index) * 90 : 80 },
-        data: { ...node, kind: 'record', label: <div><strong>{node.label}</strong><div style={{ fontSize: 11, color: '#667085' }}>{node.entity} · 點擊展開關係</div></div> },
+        data: { ...node, kind: 'record', label: <div><strong>{node.label}</strong><div style={{ fontSize: 11, color: '#667085' }}>{node.entity}</div></div> },
         style: { width: 190, border: `2px solid ${color}`, borderRadius: 9, padding: 10, background: '#fff' },
       }));
       return [...old, ...additions];
@@ -49,7 +55,7 @@ export default function LazyProjectedGraph({ projectId }) {
 
   useEffect(() => {
     fetch(apiUrl(`/query/graph?project_id=${encodeURIComponent(projectId)}`)).then((r) => r.json()).then((graph) => {
-      setNodes(graph.nodes.map((entity, index) => ({ id: `entity:${entity.id}`, position: { x: 80 + (index % 4) * 240, y: 90 + Math.floor(index / 4) * 150 }, data: { kind: 'entity', entity: entity.id, label: <div><strong>{entity.label}</strong><div style={{ fontSize: 11, color: '#667085' }}>點擊載入資料</div></div> }, style: { width: 190, border: '2px solid #0f6e56', borderRadius: 10, padding: 12, background: '#ecfdf3' } })));
+      setNodes(graph.nodes.map((entity, index) => ({ id: `entity:${entity.id}`, position: { x: 80 + (index % 4) * 240, y: 90 + Math.floor(index / 4) * 150 }, data: { kind: 'entity', entity: entity.id, label: <div><strong>{entity.label}</strong><div style={{ fontSize: 11, color: '#667085' }}>{entity.id}</div></div> }, style: { width: 190, border: '2px solid #0f6e56', borderRadius: 10, padding: 12, background: '#ecfdf3' } })));
       setStatus('選擇一個 Entity，才會載入資料節點。');
     }).catch((e) => setError(e.message));
   }, [projectId, setNodes]);
@@ -65,5 +71,5 @@ export default function LazyProjectedGraph({ projectId }) {
     }
   }, [addGraph, projectId]);
   const iconButton = (kind, title) => <button key={kind} title={title} onClick={() => changeLayout(kind)} style={{ width: 34, height: 34, display: 'grid', placeItems: 'center', border: 0, borderRadius: 7, cursor: 'pointer', color: activeLayout === kind ? '#fff' : '#344054', background: activeLayout === kind ? '#185fa5' : '#fff' }}><Icon type={kind} /></button>;
-  return <div style={{ width: '100%', height: '100%', position: 'relative' }}><div style={{ position: 'absolute', zIndex: 3, top: 16, left: 16, background: '#fffffff0', padding: 10, borderRadius: 8, fontSize: 13 }}><b>資料圖譜</b> · {status}</div><div style={{ position: 'absolute', zIndex: 3, top: 16, right: 16, display: 'flex', gap: 4, padding: 4, borderRadius: 9, background: '#f8fafc', boxShadow: '0 2px 8px #0002' }}>{iconButton('network', '網路圖')}{iconButton('tree', '樹狀圖')}{iconButton('radial', '放射狀圖')}</div>{error ? <div style={{ padding: 28, color: '#b42318' }}>{error}</div> : <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={click} fitView><Controls /><Background /></ReactFlow>}</div>;
+  return <div style={{ width: '100%', height: '100%', position: 'relative' }}><div style={{ position: 'absolute', zIndex: 3, top: 16, left: 16, background: '#fffffff0', padding: 10, borderRadius: 8, fontSize: 13 }}><b>資料圖譜</b> · {status}</div><div style={{ position: 'absolute', zIndex: 3, top: 16, right: 16, display: 'flex', gap: 4, padding: 4, borderRadius: 9, background: '#f8fafc', boxShadow: '0 2px 8px #0002' }}>{iconButton('network', '網路圖')}{iconButton('tree', '樹狀圖')}{iconButton('radial', '放射狀圖')}</div>{error ? <div style={{ padding: 28, color: '#b42318' }}>{error}</div> : <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={click} onInit={setFlow} fitView><Controls /><Background /></ReactFlow>}</div>;
 }
