@@ -71,6 +71,10 @@ class MappingRequest(BaseModel):
     properties: dict[str, Any]
     relations: dict[str, Any] = Field(default_factory=dict)
 
+class MappingReplaceRequest(BaseModel):
+    project_id: str
+    mappings: list[MappingRequest] = Field(min_length=1)
+
 # ======================================================
 # Helpers
 # ======================================================
@@ -467,6 +471,17 @@ def get_mappings(project_id: str):
         "count": len(result),
         "mappings": result,
     }
+
+@router.put("/mappings")
+def replace_mappings(request: MappingReplaceRequest):
+    if state_repository.get_project(request.project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if any(mapping.project_id != request.project_id for mapping in request.mappings):
+        raise HTTPException(status_code=400, detail="Every mapping must belong to project_id")
+
+    mappings = [mapping.model_dump() for mapping in request.mappings]
+    get_mapping_service(request.project_id).replace_all(mappings)
+    return {"status": "replaced", "project_id": request.project_id, "count": len(mappings)}
 
 
 # ======================================================

@@ -311,10 +311,62 @@ async function startBuild() {
   setJobId(null);
 
   try {
+    const selectedEntities = entities.filter(
+      (entity) => selectedTables.includes(entity.sourceTable)
+    );
+
+    if (selectedEntities.length === 0) {
+      throw new Error('沒有選擇任何資料表');
+    }
+
+    // Mapping 必須在驗證與預覽之前儲存；並以本次選取的資料表完整
+    // 取代舊 draft，避免切換資料來源後留下過期的 table Mapping。
+    const mappings = selectedEntities.map((entity) => ({
+        project_id: projectId,
+        entity: entity.entity,
+        label: entity.label,
+        source: { node_label: entity.nodeLabel },
+        ingestion: {
+          source_type: entity.sourceType,
+          source_table: entity.sourceTable,
+          primary_key: entity.primaryKey,
+        },
+        properties: Object.fromEntries(entity.properties.map((property) => [
+          property.property,
+          { column: property.column, type: property.type },
+        ])),
+        relations: Object.fromEntries((entity.relations || []).map((relation) => [
+          relation.name,
+          {
+            label: relation.label,
+            relationship_type: relation.relationshipType,
+            ingestion: {
+              foreign_key: relation.foreignKey,
+              target_key: relation.targetKey,
+            },
+            target: { entity: relation.targetEntity },
+            display: { property: relation.displayProperty },
+          },
+        ])),
+      }));
+
+    const mappingRes = await fetch(apiUrl('/builder/mappings'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ project_id: projectId, mappings }),
+    });
+
+    if (!mappingRes.ok) {
+      throw new Error(`儲存 Mapping 失敗：${await mappingRes.text() || `HTTP ${mappingRes.status}`}`);
+    }
+
     const validationRes = await fetch(apiUrl(`/builder/projects/${projectId}/validate-mappings`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ source_path: sourcePath || null, source_id: sourceId, project_id: projectId }),
     });
+    if (!validationRes.ok) {
+      throw new Error(await validationRes.text() || `驗證 Mapping 失敗（HTTP ${validationRes.status}）`);
+    }
     const validationResult = await validationRes.json();
     setValidation(validationResult);
     if (!validationRes.ok || !validationResult.valid) {
@@ -328,123 +380,6 @@ async function startBuild() {
     const previewResult = await previewRes.json();
     setPreview(previewResult);
     if (!window.confirm(`預覽完成：將建立 ${previewResult.entities.reduce((sum, item) => sum + item.nodes, 0)} 個節點。是否繼續？`)) return;
-    const selectedEntities = entities.filter(
-      (entity) =>
-        selectedTables.includes(
-          entity.sourceTable
-        )
-    );
-
-    if (selectedEntities.length === 0) {
-      throw new Error(
-        '沒有選擇任何資料表'
-      );
-    }
-
-    // ==========================================
-    // 1. Save Mapping
-    // ==========================================
-
-    for (const entity of selectedEntities) {
-      const mapping = {
-        project_id: projectId,
-        entity: entity.entity,
-
-        label: entity.label,
-
-        source: {
-          node_label:
-            entity.nodeLabel,
-        },
-
-        ingestion: {
-          source_type:
-            entity.sourceType,
-
-          source_table:
-            entity.sourceTable,
-
-          primary_key:
-            entity.primaryKey,
-        },
-
-        properties:
-          Object.fromEntries(
-            entity.properties.map(
-              (property) => [
-                property.property,
-                {
-                  column:
-                    property.column,
-
-                  type:
-                    property.type,
-                },
-              ]
-            )
-          ),
-
-        relations:
-          Object.fromEntries(
-            (entity.relations || []).map(
-              (relation) => [
-                relation.name,
-                {
-                  label:
-                    relation.label,
-
-                  relationship_type:
-                    relation.relationshipType,
-
-                  ingestion: {
-                    foreign_key:
-                      relation.foreignKey,
-
-                    target_key:
-                      relation.targetKey,
-                  },
-
-                  target: {
-                    entity:
-                      relation.targetEntity,
-                  },
-
-                  display: {
-                    property:
-                      relation.displayProperty,
-                  },
-                },
-              ]
-            )
-          ),
-      };
-
-      const mappingRes = await fetch(
-        apiUrl('/builder/mapping'),
-        {
-          method: 'POST',
-
-          headers: {
-            'Content-Type':
-              'application/json',
-          },
-
-          body: JSON.stringify(
-            mapping
-          ),
-        }
-      );
-
-      if (!mappingRes.ok) {
-        const text =
-          await mappingRes.text();
-
-        throw new Error(
-          `儲存 ${entity.entity} Mapping 失敗：${text}`
-        );
-      }
-    }
-
     // ==========================================
     // 2. Start Build
     // ==========================================

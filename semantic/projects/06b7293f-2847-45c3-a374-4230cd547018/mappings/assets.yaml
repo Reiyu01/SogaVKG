@@ -1,0 +1,67 @@
+project_id: 06b7293f-2847-45c3-a374-4230cd547018
+entity: Assets
+label: assets
+source:
+  node_label: Assets
+ingestion:
+  source_type: sqlite
+  source_table: assets
+  primary_key: id
+properties:
+  id:
+    column: id
+    type: number
+  asset_code:
+    column: asset_code
+    type: string
+  code_type:
+    column: code_type
+    type: string
+  name:
+    column: name
+    type: string
+  category_id:
+    column: category_id
+    type: number
+  location_id:
+    column: location_id
+    type: number
+  quantity:
+    column: quantity
+    type: number
+  status:
+    column: status
+    type: string
+  specification:
+    column: specification
+    type: string
+  note:
+    column: note
+    type: string
+  source_sheet:
+    column: source_sheet
+    type: string
+  duplicate_warning:
+    column: duplicate_warning
+    type: number
+relations:
+  location:
+    label: location_id
+    relationship_type: HAS_LOCATIONS
+    ingestion:
+      foreign_key: location_id
+      target_key: id
+    target:
+      entity: Locations
+    display:
+      property: name
+  category:
+    label: category_id
+    relationship_type: HAS_CATEGORIES
+    ingestion:
+      foreign_key: category_id
+      target_key: id
+    target:
+      entity: Categories
+    display:
+      property: name

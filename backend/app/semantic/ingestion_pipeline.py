@@ -56,7 +56,16 @@ class IngestionPipeline:
         with self.driver.session() as session:
             if reset:
                 self.on_progress("reset", "清空舊資料中...")
-                session.run("MATCH (n) DETACH DELETE n")
+                # 專案建置只能清除該專案的資料；不同專案可以共用同一個
+                # Neo4j instance，而其節點以 _project_id 隔離。保留沒有
+                # project_id 的舊版 ingest 行為，供既有單一專案流程使用。
+                if self.project_id:
+                    session.run(
+                        "MATCH (n { _project_id: $project_id }) DETACH DELETE n",
+                        project_id=self.project_id,
+                    )
+                else:
+                    session.run("MATCH (n) DETACH DELETE n")
 
             entity_rows: dict[str, list[dict]] = {}
             total_entities = len(self.mapper.mappings)

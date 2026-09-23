@@ -1,0 +1,17 @@
+project_id: 06b7293f-2847-45c3-a374-4230cd547018
+entity: Locations
+label: locations
+source:
+  node_label: Locations
+ingestion:
+  source_type: sqlite
+  source_table: locations
+  primary_key: id
+properties:
+  id:
+    column: id
+    type: number
+  name:
+    column: name
+    type: string
+relations: {}

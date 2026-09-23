@@ -1,0 +1,45 @@
+project_id: f5bdf351-0370-4d64-9101-0df6dec3a2dc
+entity: BorrowRecords
+label: borrow_records
+source:
+  node_label: BorrowRecords
+ingestion:
+  source_type: sqlite
+  source_table: borrow_records
+  primary_key: id
+properties:
+  id:
+    column: id
+    type: number
+  asset_id:
+    column: asset_id
+    type: number
+  borrower_name:
+    column: borrower_name
+    type: string
+  borrower_department:
+    column: borrower_department
+    type: string
+  borrowed_at:
+    column: borrowed_at
+    type: string
+  due_at:
+    column: due_at
+    type: string
+  returned_at:
+    column: returned_at
+    type: string
+  purpose:
+    column: purpose
+    type: string
+relations:
+  asset:
+    label: asset_id
+    relationship_type: HAS_ASSETS
+    ingestion:
+      foreign_key: asset_id
+      target_key: id
+    target:
+      entity: Assets
+    display:
+      property: name

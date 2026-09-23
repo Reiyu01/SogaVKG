@@ -1,0 +1,68 @@
+project_id: 06b7293f-2847-45c3-a374-4230cd547018
+entity: BorrowRecords
+label: borrow_records
+source:
+  node_label: BorrowRecords
+ingestion:
+  source_type: sqlite
+  source_table: borrow_records
+  primary_key: id
+properties:
+  id:
+    column: id
+    type: number
+  record_no:
+    column: record_no
+    type: number
+  timestamp:
+    column: timestamp
+    type: string
+  borrower_email:
+    column: borrower_email
+    type: string
+  handler:
+    column: handler
+    type: string
+  item_name:
+    column: item_name
+    type: string
+  original_asset_code:
+    column: original_asset_code
+    type: string
+  matched_asset_code:
+    column: matched_asset_code
+    type: string
+  matched_asset_name:
+    column: matched_asset_name
+    type: string
+  match_status:
+    column: match_status
+    type: string
+  note:
+    column: note
+    type: string
+  quantity:
+    column: quantity
+    type: number
+  quantity_estimated:
+    column: quantity_estimated
+    type: number
+  purpose:
+    column: purpose
+    type: string
+  usage_location:
+    column: usage_location
+    type: string
+  borrow_date:
+    column: borrow_date
+    type: string
+  return_date:
+    column: return_date
+    type: string
+  returned:
+    column: returned
+    type: number
+  original_note:
+    column: original_note
+    type: string
+relations: {}

@@ -306,7 +306,7 @@ export default function AskPage({ projectId }) {
     <div
       style={{
         flex: 1,
-        height: '100vh',
+        minHeight: 0,
         display: 'flex',
         flexDirection: 'column',
         boxSizing: 'border-box',

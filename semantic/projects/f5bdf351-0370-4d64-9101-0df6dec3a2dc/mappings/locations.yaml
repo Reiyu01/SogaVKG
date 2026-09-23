@@ -1,0 +1,26 @@
+project_id: f5bdf351-0370-4d64-9101-0df6dec3a2dc
+entity: Locations
+label: locations
+source:
+  node_label: Locations
+ingestion:
+  source_type: sqlite
+  source_table: locations
+  primary_key: id
+properties:
+  id:
+    column: id
+    type: number
+  building:
+    column: building
+    type: string
+  room:
+    column: room
+    type: string
+  name:
+    column: name
+    type: string
+  manager:
+    column: manager
+    type: string
+relations: {}

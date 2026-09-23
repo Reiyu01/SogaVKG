@@ -1,0 +1,45 @@
+project_id: f5bdf351-0370-4d64-9101-0df6dec3a2dc
+entity: MaintenanceRecords
+label: maintenance_records
+source:
+  node_label: MaintenanceRecords
+ingestion:
+  source_type: sqlite
+  source_table: maintenance_records
+  primary_key: id
+properties:
+  id:
+    column: id
+    type: number
+  asset_id:
+    column: asset_id
+    type: number
+  reported_at:
+    column: reported_at
+    type: string
+  completed_at:
+    column: completed_at
+    type: string
+  vendor:
+    column: vendor
+    type: string
+  cost:
+    column: cost
+    type: number
+  status:
+    column: status
+    type: string
+  description:
+    column: description
+    type: string
+relations:
+  asset:
+    label: asset_id
+    relationship_type: HAS_ASSETS
+    ingestion:
+      foreign_key: asset_id
+      target_key: id
+    target:
+      entity: Assets
+    display:
+      property: name
