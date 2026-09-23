@@ -5,6 +5,7 @@ import os
 import sqlite3
 import uuid
 import json
+from datetime import datetime, timezone
 
 from app.core.config import (
     SQLITE_DB_PATH,
@@ -568,51 +569,50 @@ def preview_graph():
 @router.post("/build")
 def start_build(
     request: BuildRequest,
-    background_tasks: BackgroundTasks,
 ):
+    """Publish a validated Mapping for direct, read-only graph projection.
 
+    This endpoint deliberately replaces the former Neo4j ingestion job. Source
+    rows remain in the configured SQLite database; the graph is projected from
+    those rows whenever it is explored.
+    """
     if not request.project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
     db_path = resolve_source_path(request)
+    # A Mapping can be validated with an ad-hoc path in the builder. Persist that
+    # path as a project source at publish time so the graph projection has an
+    # explicit, enabled source to read afterwards.
+    source_id = request.source_id
+    if not source_id:
+        existing_source = next((
+            source for source in state_repository.list_sources(request.project_id)
+            if source["source_type"] == "sqlite" and source["config"].get("path") == str(db_path)
+        ), None)
+        if existing_source:
+            source_id = existing_source["id"]
+            if not existing_source["active"]:
+                state_repository.set_source_active(source_id, True)
+        else:
+            source_id = str(uuid.uuid4())
+            state_repository.save_source({
+                "id": source_id,
+                "project_id": request.project_id,
+                "name": f"Published SQLite source ({db_path.name})",
+                "source_type": "sqlite",
+                "config": {"path": str(db_path)},
+            })
     mapper = get_mapper(request.project_id)
     version = state_repository.create_mapping_version(request.project_id, list(mapper.mappings.values()))
-
-    job = create_job(source_id=request.source_id, project_id=request.project_id)
-
-    def pipeline_factory(
-        on_progress,
-    ):
-
-        # 重新讀 YAML
-        #
-        # 未來前端儲存 mapping 後，
-        # build 一定要吃最新 mapping。
-        mapper = get_mapper(request.project_id)
-
-        pipeline = IngestionPipeline(
-            mapper=mapper,
-            neo4j_uri=os.environ["NEO4J_URI"],
-            neo4j_user=os.environ["NEO4J_USER"],
-            neo4j_password=os.environ["NEO4J_PASSWORD"],
-            project_id=request.project_id,
-            on_progress=on_progress,
-        )
-
-        pipeline.register_reader(
-            "sqlite",
-            SQLiteSourceReader(
-                str(db_path)
-            ),
-        )
-
-        return pipeline
-
-    background_tasks.add_task(
-        run_ingestion_job,
-        job,
-        pipeline_factory,
-        request.mode == "full",
-    )
+    job = create_job(source_id=source_id, project_id=request.project_id)
+    job.status = "done"
+    job.finished_at = datetime.now(timezone.utc).isoformat()
+    job.result = {"mode": "projection", "mapping_version": version["version"]}
+    job.logs = [{
+        "step": "publish_mapping",
+        "message": "Mapping 已發布；知識圖譜會直接由資料來源投影，不會匯入 Neo4j。",
+        "time": job.finished_at,
+    }]
+    state_repository.update_job(job.to_dict())
 
     return {
         "job_id": job.id,

@@ -8,7 +8,7 @@ export default function ProjectWorkspace() {
       <NavLink to={`/projects/${projectId}`} end style={link}>概覽</NavLink>
       <NavLink to={`/projects/${projectId}/mappings`} style={link}>Mapping 版本</NavLink>
       <NavLink to={`/projects/${projectId}/sources`} style={link}>資料來源</NavLink>
-      <NavLink to={`/projects/${projectId}/build`} style={link}>建置資料</NavLink>
+      <NavLink to={`/projects/${projectId}/build`} style={link}>資料模型</NavLink>
       <NavLink to={`/projects/${projectId}/graph`} style={link}>知識圖譜</NavLink>
       <NavLink to={`/projects/${projectId}/ask`} style={link}>AI 檢索</NavLink>
     </nav>

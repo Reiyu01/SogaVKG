@@ -1,0 +1,20 @@
+project_id: fd962882-a71a-4c0d-a986-86f8510f115a
+entity: Categories
+label: categories
+source:
+  node_label: Categories
+ingestion:
+  source_type: sqlite
+  source_table: categories
+  primary_key: id
+properties:
+  id:
+    column: id
+    type: number
+  name:
+    column: name
+    type: string
+  description:
+    column: description
+    type: string
+relations: {}

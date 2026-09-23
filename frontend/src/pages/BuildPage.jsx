@@ -41,7 +41,7 @@ const steps = [
   'Entity Mapping',
   'Relation Mapping',
   'Preview',
-  'Build',
+  'Publish',
 ];
 
 
@@ -109,7 +109,6 @@ export default function BuildPage({ projectId: fixedProjectId }) {
   const [jobId, setJobId] = useState(null);
   const [job, setJob] = useState(null);
   const [buildError, setBuildError] = useState(null);
-  const [buildMode, setBuildMode] = useState('full');
   const [validation, setValidation] = useState(null);
   const [preview, setPreview] = useState(null);
 
@@ -395,7 +394,6 @@ async function startBuild() {
           source_path: sourcePath || null,
           source_id: sourceId,
           project_id: projectId,
-          mode: buildMode,
         }),
       }
     );
@@ -1896,7 +1894,7 @@ async function startBuild() {
     );
 
     return (
-        <Card title="Build to Neo4j">
+        <Card title="發布 Mapping">
         <div
             style={{
             marginBottom: 16,
@@ -1904,7 +1902,7 @@ async function startBuild() {
             color: '#666',
             }}
         >
-            將儲存目前 Mapping，然後建立 Knowledge Graph 到 Neo4j。
+            將儲存並發布目前 Mapping。圖譜會從來源資料庫即時投影，不會複製到 Neo4j。
         </div>
 
         <div
@@ -1933,17 +1931,12 @@ async function startBuild() {
             </div>
 
             <div style={{ fontSize: 13, marginBottom: 4 }}>
-            模式：{buildMode === 'full' ? '全量重建' : '增量同步'}
+            模式：唯讀圖譜投影
             </div>
 
             <div style={{ fontSize: 13 }}>
             Entities：{selectedEntities.length}
             </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 12, marginBottom: 16, fontSize: 13 }}>
-          <label><input type="radio" checked={buildMode === 'full'} onChange={() => setBuildMode('full')} /> 全量重建</label>
-          <label><input type="radio" checked={buildMode === 'incremental'} onChange={() => setBuildMode('incremental')} /> 增量同步</label>
         </div>
 
         <div
@@ -1982,8 +1975,8 @@ async function startBuild() {
             >
             {job?.status === 'running' ||
             job?.status === 'pending'
-                ? '建置中...'
-                : '開始建置'}
+                ? '發布中...'
+                : '驗證並發布'}
             </button>
         </div>
 
@@ -2007,7 +2000,7 @@ async function startBuild() {
             {validation.warnings?.map((item) => <div key={item} style={{ color: '#8a5a00' }}>⚠ {item}</div>)}
           </div>
         )}
-        {preview && <div style={{ marginBottom: 16, padding: 12, border: '1px solid #d8d8d8', borderRadius: 8, fontSize: 13 }}><strong>建置預覽</strong>{preview.entities.map((item) => <div key={item.entity} style={{ marginTop: 8 }}><b>{item.entity}</b>：{item.nodes} 節點，跳過 {item.skipped_missing_primary_key}；{item.relations.map((relation) => <span key={relation.name}> {relation.name} {relation.matched}/{relation.candidates}（未匹配 {relation.unmatched}）</span>)}{(item.missing_primary_key_samples.length > 0 || item.relations.some((relation) => relation.unmatched_samples.length)) && <details><summary>查看資料品質問題樣本</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify({ missing_primary_key: item.missing_primary_key_samples, unmatched_relations: item.relations.filter((relation) => relation.unmatched_samples.length).map((relation) => ({ relation: relation.name, rows: relation.unmatched_samples })) }, null, 2)}</pre></details>}</div>)}</div>}
+        {preview && <div style={{ marginBottom: 16, padding: 12, border: '1px solid #d8d8d8', borderRadius: 8, fontSize: 13 }}><strong>投影預覽</strong>{preview.entities.map((item) => <div key={item.entity} style={{ marginTop: 8 }}><b>{item.entity}</b>：可投影 {item.nodes} 節點，跳過 {item.skipped_missing_primary_key}；{item.relations.map((relation) => <span key={relation.name}> {relation.name} {relation.matched}/{relation.candidates}（未匹配 {relation.unmatched}）</span>)}{(item.missing_primary_key_samples.length > 0 || item.relations.some((relation) => relation.unmatched_samples.length)) && <details><summary>查看資料品質問題樣本</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify({ missing_primary_key: item.missing_primary_key_samples, unmatched_relations: item.relations.filter((relation) => relation.unmatched_samples.length).map((relation) => ({ relation: relation.name, rows: relation.unmatched_samples })) }, null, 2)}</pre></details>}</div>)}</div>}
 
         {job && (
             <>
@@ -2076,7 +2069,7 @@ async function startBuild() {
 
             {job.status === 'done' && job.result && (
                 <div style={{ marginTop: 14, padding: 14, border: '1px solid #b7dfc5', borderRadius: 8, fontSize: 13 }}>
-                    <strong>同步報告（{job.result.mode === 'incremental' ? '增量同步' : '全量重建'}）</strong>
+                    <strong>發布報告（{job.result.mode === 'projection' ? '唯讀圖譜投影' : job.result.mode}）</strong>
                     {job.result.entities?.map((item) => <div key={item.entity} style={{ marginTop: 7 }}>{item.entity}：新增 {item.created}，更新 {item.updated}，未變更 {item.unchanged}，跳過 {item.skipped_missing_primary_key}{item.deletion_candidates ? `，清理候選 ${item.deletion_candidates}` : ''}</div>)}
                     {job.result.relations?.map((item, index) => <div key={`${item.entity}-${item.relation}-${index}`} style={{ marginTop: 4, color: '#555' }}>{item.entity}.{item.relation}：處理 {item.processed} 筆</div>)}
                 </div>
@@ -2092,7 +2085,7 @@ async function startBuild() {
                     color: '#23633c',
                 }}
                 >
-                ✓ Knowledge Graph 建置完成
+                ✓ Mapping 已發布，可前往知識圖譜探索資料
                 </div>
             )}
 
@@ -2106,7 +2099,7 @@ async function startBuild() {
                     color: '#993c1d',
                 }}
                 >
-                ✕ Knowledge Graph 建置失敗
+                ✕ Mapping 發布失敗
                 </div>
             )}
             </>
@@ -2134,7 +2127,7 @@ async function startBuild() {
         <div style={{ marginBottom: 24 }}>
           <h1 style={{ margin: 0, fontSize: 24 }}>Knowledge Builder</h1>
           <div style={{ color: '#777', marginTop: 6, fontSize: 14 }}>
-            Data Source → Mapping → Neo4j Knowledge Graph
+            Data Source → Mapping → Visual Knowledge Graph
           </div>
         </div>
 

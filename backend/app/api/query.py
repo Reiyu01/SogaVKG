@@ -1,12 +1,15 @@
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 import os
+import sqlite3
 from functools import lru_cache
+from pathlib import Path
 
 from app.core.config import (
     SQLITE_DB_PATH,
     MAPPING_DIR,
     PROJECT_MAPPING_ROOT,
+    PLATFORM_STATE_DB_PATH,
 )
 
 from app.schemas.semantic_query import SemanticQuery
@@ -26,6 +29,9 @@ from app.services.ingestion_job import (
     get_job,
     run_ingestion_job,
 )
+from app.services.graph_projection import GraphProjectionService
+from app.services.sqlite_semantic_query import SQLiteSemanticQueryService
+from app.repositories.platform_state import PlatformStateRepository
 
 
 router = APIRouter(
@@ -37,6 +43,8 @@ router = APIRouter(
 print(f"[API] SQLite DB = {SQLITE_DB_PATH}")
 print(f"[API] Mapping Dir = {MAPPING_DIR}")
 
+state_repository = PlatformStateRepository(PLATFORM_STATE_DB_PATH)
+
 
 # ======================================================
 # Semantic Mapping
@@ -45,6 +53,50 @@ print(f"[API] Mapping Dir = {MAPPING_DIR}")
 def get_mapper(project_id: str | None = None) -> SemanticMapper:
     """Load mappings at request time so saved Builder changes take effect."""
     return SemanticMapper(PROJECT_MAPPING_ROOT / project_id / "mappings" if project_id else MAPPING_DIR)
+
+
+def get_projection_service(project_id: str) -> GraphProjectionService:
+    """Resolve the project's active SQLite source for read-only graph projection."""
+    if state_repository.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    sources = [source for source in state_repository.list_sources(project_id)
+               if source["active"] and source["source_type"] == "sqlite"]
+    if not sources:
+        raise HTTPException(
+            status_code=400,
+            detail="Add and enable a SQLite source before exploring this project's graph.",
+        )
+    mapper = get_mapper(project_id)
+    database_path = next((
+        source["config"].get("path") for source in sources
+        if source["config"].get("path") and os.path.exists(source["config"]["path"])
+        and _source_matches_mapping(Path(source["config"]["path"]), mapper)
+    ), None)
+    if not database_path:
+        raise HTTPException(
+            status_code=400,
+            detail="No enabled SQLite source contains every table required by this project's Mapping.",
+        )
+    try:
+        return GraphProjectionService(mapper, Path(database_path))
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _source_matches_mapping(database_path: Path, mapper: SemanticMapper) -> bool:
+    """Avoid projecting a project's Mapping from an unrelated saved source."""
+    required_tables = {
+        mapping.get("ingestion", {}).get("source_table") or mapping.get("source", {}).get("table")
+        for mapping in mapper.mappings.values()
+    }
+    if not required_tables or None in required_tables:
+        return False
+    try:
+        with sqlite3.connect(database_path) as connection:
+            available = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        return required_tables <= available
+    except sqlite3.Error:
+        return False
 
 
 # ======================================================
@@ -72,16 +124,16 @@ def get_db() -> Neo4jAdapter:
     )
 
 
-def get_service(project_id: str | None = None) -> QueryService:
-    return QueryService(db=get_db(), mapper=get_mapper(project_id))
+def get_service(project_id: str) -> SQLiteSemanticQueryService:
+    projection = get_projection_service(project_id)
+    return SQLiteSemanticQueryService(get_mapper(project_id), projection.database_path)
 
 
 def get_nl_graph(project_id: str) -> NLQueryGraph:
     required_environment("MY_MODEL_BASE_URL", "MY_MODEL_NAME")
     mapper = get_mapper(project_id)
     return NLQueryGraph(
-        mapper=mapper,
-        query_service=QueryService(db=get_db(), mapper=mapper), project_id=project_id,
+        mapper=mapper, query_service=get_service(project_id), project_id=project_id,
     )
 
 
@@ -187,6 +239,39 @@ def get_graph(project_id: str):
         "nodes": nodes,
         "edges": edges,
     }
+
+
+@router.get("/graph/projection")
+def get_graph_projection(project_id: str, limit: int = 120):
+    """Return a bounded data graph projected from the source using its Mapping."""
+    try:
+        return get_projection_service(project_id).project(limit)
+    except (sqlite3.Error, ValueError) as error:
+        raise HTTPException(status_code=400, detail=f"Could not project graph: {error}") from error
+
+
+@router.get("/graph/projection/records")
+def get_projection_records(project_id: str, entity: str, limit: int = 50, keyword: str | None = None):
+    try:
+        return get_projection_service(project_id).records(entity, limit, keyword)
+    except (sqlite3.Error, ValueError) as error:
+        raise HTTPException(status_code=400, detail=f"Could not read mapped records: {error}") from error
+
+
+@router.get("/graph/projection/entity")
+def get_projection_entity(project_id: str, entity: str, limit: int = 12):
+    try:
+        return get_projection_service(project_id).entity_nodes(entity, limit)
+    except (sqlite3.Error, ValueError) as error:
+        raise HTTPException(status_code=400, detail=f"Could not expand entity: {error}") from error
+
+
+@router.get("/graph/projection/neighbors")
+def get_projection_neighbors(project_id: str, entity: str, source_id: str, limit: int = 20):
+    try:
+        return get_projection_service(project_id).neighbors(entity, source_id, limit)
+    except (sqlite3.Error, ValueError) as error:
+        raise HTTPException(status_code=400, detail=f"Could not expand node: {error}") from error
 
 @router.get("/graph/stats")
 def get_graph_stats(project_id: str):

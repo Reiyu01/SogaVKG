@@ -7,7 +7,6 @@ from langgraph.graph import END, START, StateGraph
 
 from app.schemas.semantic_query import SemanticQuery
 from app.semantic.mapper import SemanticMapper
-from app.semantic.cypher_query_builder import CypherQueryBuilder
 from app.semantic.schema_description import build_schema_description
 from app.services.query_service import QueryService
 
@@ -114,7 +113,7 @@ class NLQueryGraph:
         self.mapper = mapper
         self.query_service = query_service
         self.project_id = project_id
-        self.builder = CypherQueryBuilder(mapper)
+        self.builder = query_service
 
         self.client = OpenAI(
             base_url=os.environ["MY_MODEL_BASE_URL"],
