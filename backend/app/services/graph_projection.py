@@ -187,4 +187,4 @@ class GraphProjectionService:
         with sqlite3.connect(self.database_path) as connection:
             connection.row_factory = sqlite3.Row
             rows = [dict(row) for row in connection.execute(sql, params)]
-        return {"entity": entity, "data": rows, "count": len(rows)}
+        return {"entity": entity, "primary_key": self._primary_key(mapping), "data": rows, "count": len(rows)}
