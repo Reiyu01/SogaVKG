@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Background, Controls, ReactFlow, useEdgesState, useNodesState } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { apiUrl } from './config';
@@ -15,11 +15,11 @@ function Icon({ type }) {
 
 function layout(kind, nodes, edges, rootId) {
   if (kind === 'network') return nodes.map((node, index) => ({ ...node, position: { x: 80 + (index % 4) * 240, y: 90 + Math.floor(index / 4) * 130 } }));
-  const root = rootId || nodes[0]?.id;
-  const levels = new Map([[root, 0]]); const queue = [root];
-  while (queue.length) { const current = queue.shift(); for (const edge of edges.filter((item) => item.source === current)) if (!levels.has(edge.target)) { levels.set(edge.target, levels.get(current) + 1); queue.push(edge.target); } }
-  const grouped = new Map(); nodes.forEach((node) => { const level = levels.get(node.id) ?? 0; grouped.set(level, [...(grouped.get(level) || []), node]); });
-  return nodes.map((node) => { const level = levels.get(node.id) ?? 0; const row = grouped.get(level); const index = row.indexOf(node); if (kind === 'radial') { const angle = row.length === 1 ? -Math.PI / 2 : (index / row.length) * Math.PI * 2; const radius = level * 260; return { ...node, position: { x: 520 + Math.cos(angle) * radius, y: 360 + Math.sin(angle) * radius } }; } return { ...node, position: { x: 80 + level * 280, y: 80 + index * 120 } }; });
+  const roots = nodes.filter((node) => node.data.kind === 'entity'); const levels = new Map(); const groups = new Map();
+  roots.forEach((root, group) => { levels.set(root.id, 0); groups.set(root.id, group); const queue = [root.id]; while (queue.length) { const current = queue.shift(); edges.filter((edge) => edge.source === current).forEach((edge) => { if (!levels.has(edge.target)) { levels.set(edge.target, levels.get(current) + 1); groups.set(edge.target, group); queue.push(edge.target); } }); } });
+  nodes.forEach((node, index) => { if (!levels.has(node.id)) { levels.set(node.id, 0); groups.set(node.id, roots.length + index); } });
+  const rows = new Map(); nodes.forEach((node) => { const key = `${groups.get(node.id)}:${levels.get(node.id)}`; rows.set(key, [...(rows.get(key) || []), node]); });
+  return nodes.map((node) => { const group = groups.get(node.id); const level = levels.get(node.id); const row = rows.get(`${group}:${level}`); const index = row.indexOf(node); if (kind === 'radial') { const angle = row.length === 1 ? -Math.PI / 2 : (index / row.length) * Math.PI * 2; const radius = level * 180; return { ...node, position: { x: 350 + group * 520 + Math.cos(angle) * radius, y: 300 + Math.sin(angle) * radius } }; } return { ...node, position: { x: 70 + group * 460 + level * 230, y: 70 + index * 105 } }; });
 }
 
 function highlightMatch(value, keyword) {
@@ -45,6 +45,7 @@ export default function LazyProjectedGraph({ projectId }) {
   const [selectedId, setSelectedId] = useState(null);
   const [activeLayout, setActiveLayout] = useState('network');
   const [flow, setFlow] = useState(null);
+  const hasInitialFit = useRef(false);
   const [selectedInstance, setSelectedInstance] = useState(null);
   const [tableOpen, setTableOpen] = useState(false);
   const [listMode, setListMode] = useState(false);
@@ -54,8 +55,8 @@ export default function LazyProjectedGraph({ projectId }) {
   const [tableHeight, setTableHeight] = useState(255);
   const changeLayout = (kind) => { setActiveLayout(kind); setListMode(false); setTableOpen(false); setNodes((current) => layout(kind, current, edges, selectedId)); };
   useEffect(() => {
-    if (!flow || nodes.length === 0) return;
-    const frame = requestAnimationFrame(() => flow.fitView({ padding: 0.18, duration: 260, maxZoom: 1.1 }));
+    if (!flow || nodes.length === 0 || hasInitialFit.current) return;
+    const frame = requestAnimationFrame(() => { flow.fitView({ padding: 0.22, duration: 260, maxZoom: 1.1 }); hasInitialFit.current = true; });
     return () => cancelAnimationFrame(frame);
   }, [edges.length, flow, nodes.length]);
   const addGraph = useCallback((graph, parentId = null, relation = 'records') => {

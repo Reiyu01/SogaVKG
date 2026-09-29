@@ -7,10 +7,10 @@
 - [x] After a successful build, guide the user to that project's graph view.
 - [x] Show graph node/relationship counts, source details, and build history on project overview.
 - [x] Show unpublished Mapping draft changes clearly.
-- [ ] Record the Mapping version used by every build job and display it in history.
+- [x] Record the Mapping version used by every build job and display it in history.
 - [x] Disable and delete source profiles within a project.
-- [ ] Edit source profile names and connection settings within a project.
-- [ ] Import legacy example mappings into a newly created project.
+- [x] Edit source profile names and connection settings within a project.
+- [x] Import legacy example mappings into a newly created project.
 
 ## Phase 2 — Reliable ingestion for daily use
 

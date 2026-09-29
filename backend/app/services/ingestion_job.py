@@ -32,6 +32,7 @@ class IngestionJob:
         self.started_at = data.get("started_at", datetime.now(timezone.utc).isoformat())
         self.finished_at: str | None = data.get("finished_at")
         self.result = data.get("result")
+        self.mapping_version_id: str | None = data.get("mapping_version_id")
 
     def log(self, step: str, message: str):
         self.logs.append({
@@ -52,6 +53,7 @@ class IngestionJob:
             "started_at": self.started_at,
             "finished_at": self.finished_at,
             "result": self.result,
+            "mapping_version_id": self.mapping_version_id,
         }
 
 

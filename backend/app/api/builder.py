@@ -62,6 +62,7 @@ class SourceProfileRequest(BaseModel):
 class ProjectRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str | None = Field(default=None, max_length=500)
+    import_legacy_mappings: bool = False
 
 class MappingRequest(BaseModel):
     project_id: str
@@ -296,7 +297,10 @@ def list_projects():
 
 @router.post("/projects")
 def create_project(request: ProjectRequest):
-    return state_repository.create_project({"id": str(uuid.uuid4()), "name": request.name, "description": request.description})
+    project = state_repository.create_project({"id": str(uuid.uuid4()), "name": request.name, "description": request.description})
+    if request.import_legacy_mappings:
+        get_mapping_service(project["id"]).replace_all(mapping_service.list_mappings())
+    return project
 
 @router.get("/projects/{project_id}/overview")
 def project_overview(project_id: str):
@@ -414,6 +418,25 @@ def save_source(request: SourceProfileRequest):
     return state_repository.save_source({
         "id": str(uuid.uuid4()),
         "project_id": request.project_id,
+        "name": request.name,
+        "source_type": request.source_type,
+        "config": {"path": str(path)},
+    })
+
+
+@router.put("/sources/{source_id}")
+def update_source(source_id: str, request: SourceProfileRequest):
+    existing = state_repository.get_source(source_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Source profile not found")
+    if request.project_id != existing["project_id"]:
+        raise HTTPException(status_code=400, detail="A source profile cannot be moved between projects")
+    if request.source_type != "sqlite":
+        raise HTTPException(status_code=400, detail="Only sqlite sources are currently supported")
+    path = resolve_sqlite_path(request.config.get("path"))
+    return state_repository.save_source({
+        "id": source_id,
+        "project_id": existing["project_id"],
         "name": request.name,
         "source_type": request.source_type,
         "config": {"path": str(path)},
@@ -604,6 +627,7 @@ def start_build(
     mapper = get_mapper(request.project_id)
     version = state_repository.create_mapping_version(request.project_id, list(mapper.mappings.values()))
     job = create_job(source_id=source_id, project_id=request.project_id)
+    job.mapping_version_id = version["id"]
     job.status = "done"
     job.finished_at = datetime.now(timezone.utc).isoformat()
     job.result = {"mode": "projection", "mapping_version": version["version"]}

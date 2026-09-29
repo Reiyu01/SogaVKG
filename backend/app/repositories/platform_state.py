@@ -42,6 +42,7 @@ class PlatformStateRepository:
                     started_at TEXT NOT NULL,
                     finished_at TEXT
                     , result_json TEXT
+                    , mapping_version_id TEXT
                 );
                 CREATE TABLE IF NOT EXISTS projects (
                     id TEXT PRIMARY KEY,
@@ -64,6 +65,7 @@ class PlatformStateRepository:
             self._add_column_if_missing(connection, "source_profiles", "active", "INTEGER NOT NULL DEFAULT 1")
             self._add_column_if_missing(connection, "ingestion_jobs", "project_id", "TEXT")
             self._add_column_if_missing(connection, "ingestion_jobs", "result_json", "TEXT")
+            self._add_column_if_missing(connection, "ingestion_jobs", "mapping_version_id", "TEXT")
 
     @staticmethod
     def _add_column_if_missing(connection, table: str, column: str, definition: str):
@@ -171,11 +173,11 @@ class PlatformStateRepository:
         with self._connection() as connection:
             connection.execute(
                 """INSERT INTO ingestion_jobs
-                (id, project_id, status, logs_json, error, source_id, started_at, finished_at, result_json)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (id, project_id, status, logs_json, error, source_id, started_at, finished_at, result_json, mapping_version_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     job["id"], job.get("project_id"), job["status"], json.dumps(job["logs"]), job["error"],
-                    job.get("source_id"), job["started_at"], job["finished_at"], json.dumps(job.get("result")),
+                    job.get("source_id"), job["started_at"], job["finished_at"], json.dumps(job.get("result")), job.get("mapping_version_id"),
                 ),
             )
 
@@ -183,9 +185,9 @@ class PlatformStateRepository:
         with self._connection() as connection:
             connection.execute(
                 """UPDATE ingestion_jobs
-                SET status = ?, logs_json = ?, error = ?, finished_at = ?, result_json = ?
+                SET status = ?, logs_json = ?, error = ?, finished_at = ?, result_json = ?, mapping_version_id = ?
                 WHERE id = ?""",
-                (job["status"], json.dumps(job["logs"]), job["error"], job["finished_at"], json.dumps(job.get("result")), job["id"]),
+                (job["status"], json.dumps(job["logs"]), job["error"], job["finished_at"], json.dumps(job.get("result")), job.get("mapping_version_id"), job["id"]),
             )
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
@@ -197,6 +199,7 @@ class PlatformStateRepository:
             "id": row["id"], "status": row["status"], "logs": json.loads(row["logs_json"]),
             "error": row["error"], "source_id": row["source_id"], "project_id": row["project_id"],
             "started_at": row["started_at"], "finished_at": row["finished_at"], "result": json.loads(row["result_json"]) if row["result_json"] else None,
+            "mapping_version_id": row["mapping_version_id"],
         }
 
     @staticmethod
