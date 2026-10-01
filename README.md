@@ -4,13 +4,13 @@
 
 ## 目前能力
 
-- 從 SQLite 探勘資料表、欄位、外鍵與樣本資料。
+- 從 SQLite、PostgreSQL 與 Google Sheets 探勘資料表／工作表、欄位與樣本資料。
 - 在網頁中建立 Entity / Property / Relation Mapping，儲存為 YAML。
 - 依 Mapping 從 SQLite 來源資料即時投影節點與關係，不複製資料到另一套圖資料庫。
 - 以結構化語義查詢或自然語言查詢 Mapping 定義的資料。
 - 檢視互動式資料圖譜、節點屬性與關係。
 
-目前網頁的資料來源精靈已接通 SQLite；Google Sheets、MySQL 與 PostgreSQL 是規劃中的 adapter，不應在未實作前視為可用。
+目前資料來源精靈已接通 SQLite、PostgreSQL 與 Google Sheets；MySQL 仍在規劃中。Google Sheets 請使用僅讀 service account，並將其 JSON 放在伺服器的環境變數中，再在介面填入該環境變數名稱與 spreadsheet ID。
 
 ## 本機啟動
 

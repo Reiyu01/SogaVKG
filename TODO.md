@@ -20,20 +20,29 @@
 - [x] Report incremental created, updated, unchanged, and skipped node counts.
 - [ ] Allow build-job cancellation and retry with preserved error logs.
 - [x] Report data-quality samples for null keys, unmatched relations, and skipped rows.
-- [ ] Detect and report duplicate source keys.
+- [x] Detect and report duplicate source keys.
 - [x] Detect source-deletion cleanup candidates without automatic deletion.
 - [ ] Build a cleanup-candidate UI for source rows removed from an incremental sync.
 - [ ] Allow users to mark selected cleanup candidates inactive while retaining graph history.
 - [ ] Add audited, double-confirmed permanent deletion for selected cleanup candidates.
 - [ ] Show incremental job summaries and cleanup candidates in project build history.
-- [ ] Add automated integration tests: SQLite → Mapping → Neo4j → project-isolated query.
+- [x] Add automated integration tests: SQLite → Mapping → read-only graph projection → project-isolated query.
 
 ## Phase 3 — General-purpose data and Mapping support
 
-- [ ] Implement PostgreSQL, MySQL, and Google Sheets source adapters.
+- [x] Add PostgreSQL source-profile configuration and schema adapter foundation.
+- [x] Complete PostgreSQL graph projection and single-Entity query support.
+  - [x] Resolve source profiles through `SourceAdapter` by `source_type`.
+  - [x] Remove direct SQLite connections from projection and query services.
+  - [x] Support PostgreSQL graph records and relation expansion.
+  - [x] Return an explicit error for unsupported cross-source SQL joins.
+  - [x] Add PostgreSQL adapter contract and integration tests.
+- [ ] Add PostgreSQL source-profile editing and connection-test feedback.
+- [x] Implement Google Sheets source adapter.
+- [ ] Implement MySQL source adapter.
 - [ ] Separate source credentials from Mapping definitions.
 - [ ] Support property-to-property relation matching, not only ID foreign keys.
-- [ ] Ingest multiple sources into one project.
+- [x] Ingest multiple SQLite sources into one project.
 - [ ] Provide Mapping templates for common domains.
 
 ## Phase 4 — Production operation and governance

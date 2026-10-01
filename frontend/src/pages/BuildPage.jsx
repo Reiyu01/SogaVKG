@@ -35,6 +35,10 @@ function mapColumnType(type = '') {
   return 'string';
 }
 
+function mappingKey(entity) {
+  return `${entity.sourceId || 'unsaved'}:${entity.sourceTable}`;
+}
+
 const steps = [
   '資料來源',
   'Schema',
@@ -94,6 +98,8 @@ export default function BuildPage({ projectId: fixedProjectId }) {
   const [knowledgeName, setKnowledgeName] = useState('未命名知識圖譜');
   const [sourceType, setSourceType] = useState('sqlite');
   const [sourcePath, setSourcePath] = useState('');
+  const [postgresConfig, setPostgresConfig] = useState({ host: '', port: '5432', database: '', username: '', credential_ref: '' });
+  const [googleSheetsConfig, setGoogleSheetsConfig] = useState({ spreadsheet_id: '', credential_ref: '' });
   const [sourceId, setSourceId] = useState(null);
   const [sources, setSources] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -131,7 +137,7 @@ export default function BuildPage({ projectId: fixedProjectId }) {
   }, [projectId]);
 
   async function saveSourceProfile() {
-    if (!sourcePath.trim()) {
+    if (sourceType === 'sqlite' && !sourcePath.trim()) {
       setSchemaError('請先輸入 SQLite Path 才能儲存資料來源。');
       return;
     }
@@ -145,14 +151,14 @@ export default function BuildPage({ projectId: fixedProjectId }) {
           name: knowledgeName.trim() || '未命名資料來源',
           project_id: projectId,
           source_type: sourceType,
-          config: { path: sourcePath },
+          config: sourceType === 'sqlite' ? { path: sourcePath } : sourceType === 'postgresql' ? { ...postgresConfig, port: Number(postgresConfig.port) } : { ...googleSheetsConfig },
         }),
       });
       if (!res.ok) throw new Error(await res.text());
       const source = await res.json();
       setSources((items) => [source, ...items.filter((item) => item.id !== source.id)]);
       setSourceId(source.id);
-      setSourcePath(source.config.path);
+      if (source.source_type === 'sqlite') setSourcePath(source.config.path);
     } catch (err) {
       setSchemaError(err.message);
     } finally {
@@ -174,9 +180,8 @@ export default function BuildPage({ projectId: fixedProjectId }) {
             },
             body: JSON.stringify({
             source_type: sourceType,
-            path: sourceType === 'sqlite'
-                ? sourcePath
-                : null,
+            path: sourceType === 'sqlite' ? sourcePath : null,
+            config: sourceType === 'postgresql' ? { ...postgresConfig, port: Number(postgresConfig.port) } : sourceType === 'google_sheets' ? { ...googleSheetsConfig } : {},
             }),
         }
         );
@@ -203,6 +208,7 @@ export default function BuildPage({ projectId: fixedProjectId }) {
             entity: toPascalCase(table.name),
             label: table.name,
             sourceType: sourceType,
+            sourceId,
             sourceTable: table.name,
             nodeLabel: toPascalCase(table.name),
             primaryKey,
@@ -247,13 +253,8 @@ export default function BuildPage({ projectId: fixedProjectId }) {
         }
         );
 
-        setEntities(autoEntities);
-
-        setSelectedTables(
-        data.tables.map(
-            (table) => table.name
-        )
-        );
+        setEntities((current) => [...current.filter((entity) => !autoEntities.some((next) => mappingKey(next) === mappingKey(entity))), ...autoEntities]);
+        setSelectedTables((current) => [...new Set([...current, ...autoEntities.map(mappingKey)])]);
 
     } catch (err) {
         setSchemaError(err.message);
@@ -311,7 +312,7 @@ async function startBuild() {
 
   try {
     const selectedEntities = entities.filter(
-      (entity) => selectedTables.includes(entity.sourceTable)
+      (entity) => selectedTables.includes(mappingKey(entity))
     );
 
     if (selectedEntities.length === 0) {
@@ -329,6 +330,7 @@ async function startBuild() {
           source_type: entity.sourceType,
           source_table: entity.sourceTable,
           primary_key: entity.primaryKey,
+          ...(entity.sourceId ? { source_id: entity.sourceId } : {}),
         },
         properties: Object.fromEntries(entity.properties.map((property) => [
           property.property,
@@ -524,6 +526,8 @@ async function startBuild() {
                     if (source) {
                     setSourceType(source.source_type);
                     setSourcePath(source.config.path || '');
+                    if (source.source_type === 'postgresql') setPostgresConfig({ host: source.config.host || '', port: String(source.config.port || 5432), database: source.config.database || '', username: source.config.username || '', credential_ref: source.config.credential_ref || '' });
+                    if (source.source_type === 'google_sheets') setGoogleSheetsConfig({ spreadsheet_id: source.config.spreadsheet_id || '', credential_ref: source.config.credential_ref || '' });
                     }
                 }}
                 style={{ display: 'block', width: '100%', marginTop: 6, padding: '9px 11px', border: '1px solid #d8d8d8', borderRadius: 7 }}
@@ -551,8 +555,25 @@ async function startBuild() {
             </>
             )}
 
+            {sourceType === 'postgresql' && <>
+            <Input label="PostgreSQL Host" value={postgresConfig.host} onChange={(value) => setPostgresConfig({ ...postgresConfig, host: value })} />
+            <Input label="Port" value={postgresConfig.port} onChange={(value) => setPostgresConfig({ ...postgresConfig, port: value })} />
+            <Input label="Database" value={postgresConfig.database} onChange={(value) => setPostgresConfig({ ...postgresConfig, database: value })} />
+            <Input label="Username" value={postgresConfig.username} onChange={(value) => setPostgresConfig({ ...postgresConfig, username: value })} />
+            <Input label="Credential reference" value={postgresConfig.credential_ref} onChange={(value) => setPostgresConfig({ ...postgresConfig, credential_ref: value })} />
+            <p style={{ marginTop: -6, color: '#667085', fontSize: 12 }}>填入存放密碼的環境變數名稱，例如 <code>VKG_POSTGRES_PASSWORD</code>；不輸入密碼。</p>
+            <button onClick={saveSourceProfile} disabled={sourceSaving || !postgresConfig.host || !postgresConfig.database || !postgresConfig.username || !postgresConfig.credential_ref} style={{ marginTop: -4, marginBottom: 16, border: '1px solid #185fa5', borderRadius: 8, padding: '8px 12px', color: '#185fa5', background: '#fff', cursor: 'pointer' }}>{sourceSaving ? '儲存中...' : '儲存為資料來源'}</button>
+            </>}
+
+            {sourceType === 'google_sheets' && <>
+            <Input label="Spreadsheet ID" value={googleSheetsConfig.spreadsheet_id} onChange={(value) => setGoogleSheetsConfig({ ...googleSheetsConfig, spreadsheet_id: value })} />
+            <Input label="Credential reference" value={googleSheetsConfig.credential_ref} onChange={(value) => setGoogleSheetsConfig({ ...googleSheetsConfig, credential_ref: value })} />
+            <p style={{ marginTop: -6, color: '#667085', fontSize: 12 }}>填入含 service-account JSON 的伺服器環境變數名稱，例如 <code>VKG_GOOGLE_SERVICE_ACCOUNT_JSON</code>。請將試算表分享給該 service account 的 email。</p>
+            <button onClick={saveSourceProfile} disabled={sourceSaving || !googleSheetsConfig.spreadsheet_id || !googleSheetsConfig.credential_ref} style={{ marginTop: -4, marginBottom: 16, border: '1px solid #185fa5', borderRadius: 8, padding: '8px 12px', color: '#185fa5', background: '#fff', cursor: 'pointer' }}>{sourceSaving ? '儲存中...' : '儲存為資料來源'}</button>
+            </>}
+
             {/* 尚未支援的資料來源 */}
-            {sourceType !== 'sqlite' && (
+            {sourceType !== 'sqlite' && sourceType !== 'postgresql' && sourceType !== 'google_sheets' && (
             <div
                 style={{
                 padding: 12,
@@ -590,11 +611,11 @@ async function startBuild() {
             }}
             disabled={
                 schemaLoading ||
-                sourceType !== 'sqlite'
+                sourceType !== 'sqlite' && sourceType !== 'postgresql' && sourceType !== 'google_sheets'
             }
             style={{
                 background:
-                sourceType === 'sqlite'
+                sourceType === 'sqlite' || sourceType === 'google_sheets'
                     ? '#185fa5'
                     : '#aaa',
 
@@ -604,7 +625,7 @@ async function startBuild() {
                 padding: '10px 16px',
 
                 cursor:
-                sourceType === 'sqlite'
+                sourceType === 'sqlite' || sourceType === 'google_sheets'
                     ? 'pointer'
                     : 'not-allowed',
 
@@ -705,18 +726,16 @@ async function startBuild() {
                 >
                 <input
                     type="checkbox"
-                    checked={selectedTables.includes(table.name)}
+                    checked={selectedTables.includes(mappingKey({ sourceId, sourceTable: table.name }))}
                     onChange={(e) => {
                     if (e.target.checked) {
                         setSelectedTables((prev) => [
                         ...prev,
-                        table.name,
+                        mappingKey({ sourceId, sourceTable: table.name }),
                         ]);
                     } else {
                         setSelectedTables((prev) =>
-                        prev.filter(
-                            (name) => name !== table.name
-                        )
+                        prev.filter((name) => name !== mappingKey({ sourceId, sourceTable: table.name }))
                         );
                     }
                     }}
@@ -913,7 +932,7 @@ async function startBuild() {
     if (step === 2) {
     const selectedEntities = entities.filter(
         (entity) =>
-        selectedTables.includes(entity.sourceTable)
+        selectedTables.includes(mappingKey(entity))
     );
 
     if (selectedEntities.length === 0) {
@@ -938,12 +957,12 @@ async function startBuild() {
         {selectedEntities.map((entity) => {
             const entityIndex = entities.findIndex(
             (item) =>
-                item.sourceTable === entity.sourceTable
+                mappingKey(item) === mappingKey(entity)
             );
 
             return (
             <div
-                key={entity.sourceTable}
+                key={mappingKey(entity)}
                 style={{
                 border: '1px solid #eee',
                 borderRadius: 10,
@@ -960,6 +979,13 @@ async function startBuild() {
                 >
                 {entity.sourceTable}
                 </div>
+
+                <label style={{ display: 'block', marginBottom: 14, fontSize: 13, color: '#555' }}>資料來源
+                <select value={entity.sourceId || ''} onChange={(event) => { const next = structuredClone(entities); next[entityIndex].sourceId = event.target.value || null; setEntities(next); }} style={{ display: 'block', width: '100%', marginTop: 6, padding: '9px 11px', border: '1px solid #d8d8d8', borderRadius: 7 }}>
+                    <option value="">使用目前 Builder 資料來源</option>
+                    {sources.filter((source) => source.active).map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
+                </select>
+                </label>
 
                 <div
                 style={{
@@ -1195,7 +1221,7 @@ async function startBuild() {
     if (step === 3) {
     const selectedEntities = entities.filter(
         (entity) =>
-        selectedTables.includes(entity.sourceTable)
+        selectedTables.includes(mappingKey(entity))
     );
 
     if (selectedEntities.length === 0) {
@@ -1254,12 +1280,12 @@ async function startBuild() {
         {entitiesWithRelations.map((entity) => {
             const entityIndex = entities.findIndex(
             (item) =>
-                item.sourceTable === entity.sourceTable
+                mappingKey(item) === mappingKey(entity)
             );
 
             return (
             <div
-                key={entity.sourceTable}
+                key={mappingKey(entity)}
                 style={{
                 border: '1px solid #eee',
                 borderRadius: 10,
@@ -1519,7 +1545,7 @@ async function startBuild() {
     if (step === 4) {
     const selectedEntities = entities.filter(
         (entity) =>
-        selectedTables.includes(entity.sourceTable)
+        selectedTables.includes(mappingKey(entity))
     );
 
     if (selectedEntities.length === 0) {
@@ -1566,7 +1592,7 @@ async function startBuild() {
             >
             {selectedEntities.map((entity) => (
                 <div
-                key={entity.sourceTable}
+                key={mappingKey(entity)}
                 style={{
                     minWidth: 160,
                     padding: 14,
@@ -1698,7 +1724,7 @@ async function startBuild() {
         <Card title="Mapping Preview">
             {selectedEntities.map((entity) => (
             <div
-                key={entity.sourceTable}
+                key={mappingKey(entity)}
                 style={{
                 border: '1px solid #eee',
                 borderRadius: 10,
@@ -1793,6 +1819,7 @@ async function startBuild() {
                 source_type: entity.sourceType,
                 source_table: entity.sourceTable,
                 primary_key: entity.primaryKey,
+                ...(entity.sourceId ? { source_id: entity.sourceId } : {}),
                 },
 
                 properties:
@@ -1847,7 +1874,7 @@ async function startBuild() {
 
             return (
                 <div
-                key={entity.sourceTable}
+                key={mappingKey(entity)}
                 style={{
                     marginBottom: 18,
                 }}
@@ -1890,7 +1917,7 @@ async function startBuild() {
     if (step === 5) {
     const selectedEntities = entities.filter(
         (entity) =>
-        selectedTables.includes(entity.sourceTable)
+        selectedTables.includes(mappingKey(entity))
     );
 
     return (
@@ -2000,7 +2027,7 @@ async function startBuild() {
             {validation.warnings?.map((item) => <div key={item} style={{ color: '#8a5a00' }}>⚠ {item}</div>)}
           </div>
         )}
-        {preview && <div style={{ marginBottom: 16, padding: 12, border: '1px solid #d8d8d8', borderRadius: 8, fontSize: 13 }}><strong>投影預覽</strong>{preview.entities.map((item) => <div key={item.entity} style={{ marginTop: 8 }}><b>{item.entity}</b>：可投影 {item.nodes} 節點，跳過 {item.skipped_missing_primary_key}；{item.relations.map((relation) => <span key={relation.name}> {relation.name} {relation.matched}/{relation.candidates}（未匹配 {relation.unmatched}）</span>)}{(item.missing_primary_key_samples.length > 0 || item.relations.some((relation) => relation.unmatched_samples.length)) && <details><summary>查看資料品質問題樣本</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify({ missing_primary_key: item.missing_primary_key_samples, unmatched_relations: item.relations.filter((relation) => relation.unmatched_samples.length).map((relation) => ({ relation: relation.name, rows: relation.unmatched_samples })) }, null, 2)}</pre></details>}</div>)}</div>}
+        {preview && <div style={{ marginBottom: 16, padding: 12, border: '1px solid #d8d8d8', borderRadius: 8, fontSize: 13 }}><strong>投影預覽</strong>{preview.entities.map((item) => { const duplicates = item.duplicate_primary_keys; const hasQualityIssues = item.missing_primary_key_samples.length > 0 || item.relations.some((relation) => relation.unmatched_samples.length) || duplicates?.duplicate_key_count; return <div key={item.entity} style={{ marginTop: 8 }}><b>{item.entity}</b>：可投影 {item.nodes} 節點，跳過 {item.skipped_missing_primary_key}；{duplicates?.duplicate_key_count > 0 && <span style={{ color: '#8a5a00' }}> ⚠ 重複主鍵 {duplicates.duplicate_key_count} 組（多出 {duplicates.duplicate_row_count} 筆）</span>}{item.relations.map((relation) => <span key={relation.name}> {relation.name} {relation.matched}/{relation.candidates}（未匹配 {relation.unmatched}）</span>)}{hasQualityIssues && <details><summary>查看資料品質問題樣本</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify({ missing_primary_key: item.missing_primary_key_samples, duplicate_primary_keys: duplicates?.samples || [], unmatched_relations: item.relations.filter((relation) => relation.unmatched_samples.length).map((relation) => ({ relation: relation.name, rows: relation.unmatched_samples })) }, null, 2)}</pre></details>}</div>; })}</div>}
 
         {job && (
             <>
@@ -2072,6 +2099,7 @@ async function startBuild() {
                     <strong>發布報告（{job.result.mode === 'projection' ? '唯讀圖譜投影' : job.result.mode}）</strong>
                     {job.result.entities?.map((item) => <div key={item.entity} style={{ marginTop: 7 }}>{item.entity}：新增 {item.created}，更新 {item.updated}，未變更 {item.unchanged}，跳過 {item.skipped_missing_primary_key}{item.deletion_candidates ? `，清理候選 ${item.deletion_candidates}` : ''}</div>)}
                     {job.result.relations?.map((item, index) => <div key={`${item.entity}-${item.relation}-${index}`} style={{ marginTop: 4, color: '#555' }}>{item.entity}.{item.relation}：處理 {item.processed} 筆</div>)}
+                    {job.result.data_quality?.filter((item) => item.duplicate_primary_keys?.duplicate_key_count).map((item) => <div key={item.entity} style={{ marginTop: 4, color: '#8a5a00' }}>⚠ {item.entity}：重複主鍵 {item.duplicate_primary_keys.duplicate_key_count} 組（多出 {item.duplicate_primary_keys.duplicate_row_count} 筆）</div>)}
                 </div>
             )}
 

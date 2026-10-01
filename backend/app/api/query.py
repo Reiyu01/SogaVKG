@@ -31,6 +31,7 @@ from app.services.ingestion_job import (
 )
 from app.services.graph_projection import GraphProjectionService
 from app.services.sqlite_semantic_query import SQLiteSemanticQueryService
+from app.services.source_resolution import resolve_entity_source_adapters
 from app.repositories.platform_state import PlatformStateRepository
 
 
@@ -56,47 +57,20 @@ def get_mapper(project_id: str | None = None) -> SemanticMapper:
 
 
 def get_projection_service(project_id: str) -> GraphProjectionService:
-    """Resolve the project's active SQLite source for read-only graph projection."""
+    """Resolve the project's active source adapters for read-only projection."""
     if state_repository.get_project(project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    sources = [source for source in state_repository.list_sources(project_id)
-               if source["active"] and source["source_type"] == "sqlite"]
+    sources = [source for source in state_repository.list_sources(project_id) if source["active"]]
     if not sources:
         raise HTTPException(
             status_code=400,
-            detail="Add and enable a SQLite source before exploring this project's graph.",
+            detail="Add and enable a supported source before exploring this project's graph.",
         )
     mapper = get_mapper(project_id)
-    database_path = next((
-        source["config"].get("path") for source in sources
-        if source["config"].get("path") and os.path.exists(source["config"]["path"])
-        and _source_matches_mapping(Path(source["config"]["path"]), mapper)
-    ), None)
-    if not database_path:
-        raise HTTPException(
-            status_code=400,
-            detail="No enabled SQLite source contains every table required by this project's Mapping.",
-        )
     try:
-        return GraphProjectionService(mapper, Path(database_path))
+        return GraphProjectionService(mapper, resolve_entity_source_adapters(mapper, sources))
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-
-
-def _source_matches_mapping(database_path: Path, mapper: SemanticMapper) -> bool:
-    """Avoid projecting a project's Mapping from an unrelated saved source."""
-    required_tables = {
-        mapping.get("ingestion", {}).get("source_table") or mapping.get("source", {}).get("table")
-        for mapping in mapper.mappings.values()
-    }
-    if not required_tables or None in required_tables:
-        return False
-    try:
-        with sqlite3.connect(database_path) as connection:
-            available = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        return required_tables <= available
-    except sqlite3.Error:
-        return False
 
 
 # ======================================================
@@ -126,7 +100,7 @@ def get_db() -> Neo4jAdapter:
 
 def get_service(project_id: str) -> SQLiteSemanticQueryService:
     projection = get_projection_service(project_id)
-    return SQLiteSemanticQueryService(get_mapper(project_id), projection.database_path)
+    return SQLiteSemanticQueryService(get_mapper(project_id), projection.sources)
 
 
 def get_nl_graph(project_id: str) -> NLQueryGraph:

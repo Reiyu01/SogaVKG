@@ -2,7 +2,6 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel, Field
 from pathlib import Path
 import os
-import sqlite3
 import uuid
 import json
 from datetime import datetime, timezone
@@ -27,6 +26,9 @@ from app.services.ingestion_job import (
 )
 from typing import Any
 from app.services.mapping_service import MappingService
+from app.services.data_quality import preview_mappings_by_source
+from app.services.source_resolution import resolve_entity_source_adapters
+from app.adapters.source_adapter import create_source_adapter
 from app.repositories.platform_state import PlatformStateRepository
 
 router = APIRouter(
@@ -45,6 +47,7 @@ state_repository = PlatformStateRepository(PLATFORM_STATE_DB_PATH)
 class SourceSchemaRequest(BaseModel):
     source_type: str = "sqlite"
     path: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
 
 class BuildRequest(BaseModel):
     reset: bool = True
@@ -132,17 +135,15 @@ def resolve_sqlite_path(
     return db_path
 
 
-def resolve_source_path(request: BuildRequest) -> Path:
+def sources_for_request(request: BuildRequest, fallback_path: Path | None = None) -> list[dict[str, Any]]:
+    sources = state_repository.list_sources(request.project_id)
     if request.source_id:
-        source = state_repository.get_source(request.source_id)
-        if source is None:
-            raise HTTPException(status_code=404, detail="Source profile not found")
-        if not source["active"]:
-            raise HTTPException(status_code=400, detail="Source profile is disabled")
-        if source["source_type"] != "sqlite":
-            raise HTTPException(status_code=400, detail="Only sqlite sources are supported for builds")
-        return resolve_sqlite_path(source["config"].get("path"))
-    return resolve_sqlite_path(request.source_path)
+        if not any(source["id"] == request.source_id and source["active"] for source in sources):
+            raise HTTPException(status_code=400, detail="Selected source profile is unavailable or disabled")
+        return sources
+    if fallback_path is None:
+        fallback_path = resolve_sqlite_path(request.source_path)
+    return [{"id": "__build_source__", "active": True, "source_type": "sqlite", "config": {"path": str(fallback_path)}}] + sources
 
 
 # ======================================================
@@ -164,127 +165,14 @@ def builder_health():
 # ======================================================
 
 @router.post("/source/schema")
-def get_source_schema(
-    request: SourceSchemaRequest,
-):
-
-    if request.source_type != "sqlite":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Unsupported source type: "
-                f"{request.source_type}"
-            ),
-        )
-
-    db_path = resolve_sqlite_path(
-        request.path
-    )
-
-    conn = sqlite3.connect(
-        str(db_path)
-    )
-
-    conn.row_factory = sqlite3.Row
-
+def get_source_schema(request: SourceSchemaRequest):
+    config = dict(request.config)
+    if request.source_type == "sqlite":
+        config["path"] = str(resolve_sqlite_path(request.path or config.get("path")))
     try:
-
-        table_rows = conn.execute(
-            """
-            SELECT name
-            FROM sqlite_master
-            WHERE type = 'table'
-              AND name NOT LIKE 'sqlite_%'
-            ORDER BY name
-            """
-        ).fetchall()
-
-        tables = []
-
-        for table_row in table_rows:
-
-            table_name = table_row["name"]
-
-            columns_raw = conn.execute(
-                f'PRAGMA table_info("{table_name}")'
-            ).fetchall()
-
-            foreign_keys_raw = conn.execute(
-                f'PRAGMA foreign_key_list("{table_name}")'
-            ).fetchall()
-
-            columns = []
-
-            for column in columns_raw:
-
-                columns.append(
-                    {
-                        "name": column["name"],
-                        "type": column["type"],
-                        "nullable": (
-                            column["notnull"] == 0
-                        ),
-                        "default": column["dflt_value"],
-                        "primary_key": (
-                            column["pk"] > 0
-                        ),
-                    }
-                )
-
-            foreign_keys = []
-
-            for fk in foreign_keys_raw:
-
-                foreign_keys.append(
-                    {
-                        "column": fk["from"],
-                        "target_table": fk["table"],
-                        "target_column": fk["to"],
-                    }
-                )
-
-            sample_rows_raw = conn.execute(
-                f'''
-                SELECT *
-                FROM "{table_name}"
-                LIMIT 5
-                '''
-            ).fetchall()
-
-            sample_rows = [
-                dict(row)
-                for row in sample_rows_raw
-            ]
-
-            count_row = conn.execute(
-                f'''
-                SELECT COUNT(*) AS count
-                FROM "{table_name}"
-                '''
-            ).fetchone()
-
-            tables.append(
-                {
-                    "name": table_name,
-                    "row_count": (
-                        count_row["count"]
-                        if count_row
-                        else 0
-                    ),
-                    "columns": columns,
-                    "foreign_keys": foreign_keys,
-                    "sample_rows": sample_rows,
-                }
-            )
-
-        return {
-            "source_type": "sqlite",
-            "path": str(db_path),
-            "tables": tables,
-        }
-
-    finally:
-        conn.close()
+        return create_source_adapter(request.source_type, config).inspect_schema()
+    except (KeyError, RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 # ======================================================
@@ -335,64 +223,43 @@ def mapping_version(project_id: str, version: int):
 
 @router.post("/projects/{project_id}/validate-mappings")
 def validate_mappings(project_id: str, request: BuildRequest):
-    db_path = resolve_source_path(request)
     mapper = get_mapper(project_id)
+    try:
+        source_adapters = resolve_entity_source_adapters(mapper, sources_for_request(request))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     errors: list[str] = []
     warnings: list[str] = []
-    with sqlite3.connect(db_path) as connection:
-        tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
-        for entity, mapping in mapper.mappings.items():
-            ingestion = mapping.get("ingestion", {})
-            table = ingestion.get("source_table")
-            if not table or table not in tables:
-                errors.append(f"{entity}: source_table '{table}' does not exist")
-                continue
-            columns = {row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')}
-            primary_key = ingestion.get("primary_key", "id")
-            if primary_key not in columns:
-                errors.append(f"{entity}: primary_key '{primary_key}' does not exist in {table}")
-            for name, definition in mapping.get("properties", {}).items():
-                if definition.get("column") not in columns:
-                    errors.append(f"{entity}.{name}: column '{definition.get('column')}' does not exist")
-            for name, relation in mapping.get("relations", {}).items():
-                target = relation.get("target", {}).get("entity")
-                foreign_key = relation.get("ingestion", {}).get("foreign_key")
-                if target not in mapper.mappings:
-                    errors.append(f"{entity}.{name}: target entity '{target}' does not exist")
-                if foreign_key not in columns:
-                    errors.append(f"{entity}.{name}: foreign_key '{foreign_key}' does not exist")
-            if not mapping.get("properties"):
-                warnings.append(f"{entity}: no properties are mapped")
+    for entity, mapping in mapper.mappings.items():
+        adapter = source_adapters[entity]
+        ingestion = mapping.get("ingestion", {}); table = ingestion.get("source_table")
+        tables = {item["name"] for item in adapter.inspect_schema()["tables"]}
+        if not table or table not in tables:
+            errors.append(f"{entity}: source_table '{table}' does not exist"); continue
+        columns = adapter.table_columns(table); primary_key = ingestion.get("primary_key", "id")
+        if primary_key not in columns:
+            errors.append(f"{entity}: primary_key '{primary_key}' does not exist in {table}")
+        else:
+            duplicates = adapter.duplicate_keys(table, primary_key)
+            if duplicates["duplicate_key_count"]:
+                warnings.append(f"{entity}: {duplicates['duplicate_key_count']} duplicate primary key value(s), affecting {duplicates['duplicate_row_count']} extra row(s)")
+        for name, definition in mapping.get("properties", {}).items():
+            if definition.get("column") not in columns: errors.append(f"{entity}.{name}: column '{definition.get('column')}' does not exist")
+        for name, relation in mapping.get("relations", {}).items():
+            target = relation.get("target", {}).get("entity"); foreign_key = relation.get("ingestion", {}).get("foreign_key")
+            if target not in mapper.mappings: errors.append(f"{entity}.{name}: target entity '{target}' does not exist")
+            if foreign_key not in columns: errors.append(f"{entity}.{name}: foreign_key '{foreign_key}' does not exist")
+        if not mapping.get("properties"): warnings.append(f"{entity}: no properties are mapped")
     return {"valid": not errors, "errors": errors, "warnings": warnings}
 
 @router.post("/projects/{project_id}/build-preview")
 def build_preview(project_id: str, request: BuildRequest):
-    db_path = resolve_source_path(request)
     mapper = get_mapper(project_id)
-    preview = []
-    with sqlite3.connect(db_path) as connection:
-        connection.row_factory = sqlite3.Row
-        for entity, mapping in mapper.mappings.items():
-            ingestion = mapping.get("ingestion", {})
-            table = ingestion.get("source_table")
-            primary_key = ingestion.get("primary_key", "id")
-            rows = [dict(row) for row in connection.execute(f'SELECT * FROM "{table}"')]
-            valid_rows = [row for row in rows if row.get(primary_key) is not None]
-            missing_primary_key_samples = [row for row in rows if row.get(primary_key) is None][:20]
-            relations = []
-            for name, relation in mapping.get("relations", {}).items():
-                foreign_key = relation.get("ingestion", {}).get("foreign_key")
-                target = relation.get("target", {}).get("entity")
-                target_mapping = mapper.get_entity(target)
-                target_table = target_mapping.get("ingestion", {}).get("source_table")
-                target_key = relation.get("ingestion", {}).get("target_key") or target_mapping.get("ingestion", {}).get("primary_key", "id")
-                target_ids = {row[0] for row in connection.execute(f'SELECT "{target_key}" FROM "{target_table}"')}
-                candidates = [row for row in valid_rows if row.get(foreign_key) is not None]
-                matched = sum(row.get(foreign_key) in target_ids for row in candidates)
-                unmatched_samples = [{"foreign_key": row.get(foreign_key), "primary_key": row.get(primary_key)} for row in candidates if row.get(foreign_key) not in target_ids][:20]
-                relations.append({"name": name, "candidates": len(candidates), "matched": matched, "unmatched": len(candidates) - matched, "unmatched_samples": unmatched_samples})
-            preview.append({"entity": entity, "source_table": table, "rows": len(rows), "nodes": len(valid_rows), "skipped_missing_primary_key": len(rows) - len(valid_rows), "missing_primary_key_samples": missing_primary_key_samples, "relations": relations})
-    return {"entities": preview}
+    try:
+        source_adapters = resolve_entity_source_adapters(mapper, sources_for_request(request))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    return {"entities": preview_mappings_by_source(mapper, source_adapters)}
 
 @router.post("/projects/{project_id}/mapping-versions/{version}/restore")
 def restore_mapping_version(project_id: str, version: int):
@@ -411,16 +278,26 @@ def list_sources(project_id: str | None = None):
 def save_source(request: SourceProfileRequest):
     if request.project_id and state_repository.get_project(request.project_id) is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    if request.source_type != "sqlite":
-        raise HTTPException(status_code=400, detail="Only sqlite sources are currently supported")
-
-    path = resolve_sqlite_path(request.config.get("path"))
+    if request.source_type == "sqlite":
+        config = {"path": str(resolve_sqlite_path(request.config.get("path")))}
+    elif request.source_type == "postgresql":
+        required = {"host", "database", "username", "credential_ref"}
+        if missing := required - request.config.keys():
+            raise HTTPException(status_code=400, detail=f"PostgreSQL config is missing: {', '.join(sorted(missing))}")
+        config = {key: request.config[key] for key in ("host", "port", "database", "username", "credential_ref") if key in request.config}
+    elif request.source_type == "google_sheets":
+        required = {"spreadsheet_id", "credential_ref"}
+        if missing := required - request.config.keys():
+            raise HTTPException(status_code=400, detail=f"Google Sheets config is missing: {', '.join(sorted(missing))}")
+        config = {key: request.config[key] for key in required}
+    else:
+        raise HTTPException(status_code=400, detail=f"Unsupported source type: {request.source_type}")
     return state_repository.save_source({
         "id": str(uuid.uuid4()),
         "project_id": request.project_id,
         "name": request.name,
         "source_type": request.source_type,
-        "config": {"path": str(path)},
+        "config": config,
     })
 
 
@@ -596,17 +473,17 @@ def start_build(
     """Publish a validated Mapping for direct, read-only graph projection.
 
     This endpoint deliberately replaces the former Neo4j ingestion job. Source
-    rows remain in the configured SQLite database; the graph is projected from
+    rows remain in the configured source; the graph is projected from
     those rows whenever it is explored.
     """
     if not request.project_id:
         raise HTTPException(status_code=400, detail="project_id is required")
-    db_path = resolve_source_path(request)
     # A Mapping can be validated with an ad-hoc path in the builder. Persist that
     # path as a project source at publish time so the graph projection has an
     # explicit, enabled source to read afterwards.
     source_id = request.source_id
     if not source_id:
+        db_path = resolve_sqlite_path(request.source_path)
         existing_source = next((
             source for source in state_repository.list_sources(request.project_id)
             if source["source_type"] == "sqlite" and source["config"].get("path") == str(db_path)
@@ -625,12 +502,16 @@ def start_build(
                 "config": {"path": str(db_path)},
             })
     mapper = get_mapper(request.project_id)
+    data_quality = preview_mappings_by_source(
+        mapper,
+        resolve_entity_source_adapters(mapper, state_repository.list_sources(request.project_id)),
+    )
     version = state_repository.create_mapping_version(request.project_id, list(mapper.mappings.values()))
     job = create_job(source_id=source_id, project_id=request.project_id)
     job.mapping_version_id = version["id"]
     job.status = "done"
     job.finished_at = datetime.now(timezone.utc).isoformat()
-    job.result = {"mode": "projection", "mapping_version": version["version"]}
+    job.result = {"mode": "projection", "mapping_version": version["version"], "data_quality": data_quality}
     job.logs = [{
         "step": "publish_mapping",
         "message": "Mapping 已發布；知識圖譜會直接由資料來源投影，不會匯入 Neo4j。",
