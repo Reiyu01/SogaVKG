@@ -36,16 +36,19 @@ function mapColumnType(type = '') {
 }
 
 function mappingKey(entity) {
-  return `${entity.sourceId || 'unsaved'}:${entity.sourceTable}`;
+  // A Builder run represents one source-backed model, so table name is enough.
+  // Keeping sourceId in this UI key caused the checkbox state to drift when a
+  // saved source was selected after schema discovery.
+  return entity.sourceTable;
 }
 
 const steps = [
-  '資料來源',
-  'Schema',
-  'Entity Mapping',
-  'Relation Mapping',
-  'Preview',
-  'Publish',
+  '選擇資料來源',
+  '選擇要使用的資料',
+  '命名資料類型與欄位',
+  '確認資料關係',
+  '檢查模型',
+  '發布並探索',
 ];
 
 
@@ -67,11 +70,29 @@ function Card({ title, children }) {
   );
 }
 
-function Input({ label, value, onChange, disabled = false }) {
+function HelpTip({ children }) {
+  const [open, setOpen] = useState(false);
   return (
-    <label style={{ display: 'block', marginBottom: 14 }}>
+    <span
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      style={{ position: 'relative', display: 'inline-flex', marginLeft: 5, verticalAlign: 'middle' }}
+    >
+      <span aria-label="說明" style={{ width: 15, height: 15, borderRadius: '50%', background: '#667085', color: '#fff', fontSize: 11, lineHeight: '15px', textAlign: 'center', cursor: 'help' }}>?</span>
+      {open && <span role="tooltip" style={{ position: 'absolute', zIndex: 5, top: 21, left: -8, width: 230, padding: '9px 10px', borderRadius: 7, background: '#1f2937', color: '#fff', fontSize: 12, fontWeight: 400, lineHeight: 1.45, boxShadow: '0 4px 12px rgba(0,0,0,.2)' }}>{children}</span>}
+    </span>
+  );
+}
+
+function StepIntro({ title, children }) {
+  return <div style={{ margin: '-2px 0 18px', padding: '12px 14px', borderLeft: '3px solid #185fa5', borderRadius: 6, background: '#eef6ff', color: '#344054', fontSize: 13, lineHeight: 1.55 }}><strong>{title}</strong><div style={{ marginTop: 3 }}>{children}</div></div>;
+}
+
+function Input({ label, help, value, onChange, disabled = false, containerStyle }) {
+  return (
+    <label style={{ display: 'block', marginBottom: 14, ...containerStyle }}>
       <div style={{ fontSize: 13, color: '#555', marginBottom: 6 }}>
-        {label}
+        {label}{help && <HelpTip>{help}</HelpTip>}
       </div>
 
       <input
@@ -253,8 +274,8 @@ export default function BuildPage({ projectId: fixedProjectId }) {
         }
         );
 
-        setEntities((current) => [...current.filter((entity) => !autoEntities.some((next) => mappingKey(next) === mappingKey(entity))), ...autoEntities]);
-        setSelectedTables((current) => [...new Set([...current, ...autoEntities.map(mappingKey)])]);
+        setEntities(autoEntities);
+        setSelectedTables(autoEntities.map(mappingKey));
 
     } catch (err) {
         setSchemaError(err.message);
@@ -317,6 +338,16 @@ async function startBuild() {
 
     if (selectedEntities.length === 0) {
       throw new Error('沒有選擇任何資料表');
+    }
+    for (const entity of selectedEntities) {
+      for (const relation of entity.relations || []) {
+        if (!relation.foreignKey?.trim()) {
+          throw new Error(`「${entity.label || entity.entity}」的關係「${relation.label || relation.name}」尚未選擇來源欄位。請在「確認資料關係」填入用來連結目標資料的欄位，或刪除此關係。`);
+        }
+        if (!relation.targetEntity || !relation.targetKey?.trim()) {
+          throw new Error(`「${entity.label || entity.entity}」的關係「${relation.label || relation.name}」尚未完成目標資料類型或唯一編號欄位。`);
+        }
+      }
     }
 
     // Mapping 必須在驗證與預覽之前儲存；並以本次選取的資料表完整
@@ -437,8 +468,12 @@ async function startBuild() {
     return (
         <>
         <Card title="基本設定">
+            <StepIntro title="先決定資料從哪裡來">
+              資料來源是「可重複使用的連線設定」。選取後，這次建立的資料類型、關係與之後的圖譜查詢都會使用同一份資料。
+            </StepIntro>
             <Input
-            label="Knowledge Name"
+            label="這份資料模型的名稱"
+            help="用來辨識這次建模工作；不會修改原始資料。"
             value={knowledgeName}
             onChange={setKnowledgeName}
             />
@@ -450,15 +485,25 @@ async function startBuild() {
                 {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
               </select>
             </label>}
-            <button onClick={async () => {
-              const name = window.prompt('輸入新專案名稱');
-              if (!name?.trim()) return;
-              const response = await fetch(apiUrl('/builder/projects'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim() }) });
-              if (!response.ok) { setSchemaError(await response.text()); return; }
-              const project = await response.json();
-              setProjects((items) => [project, ...items]);
-              setProjectId(project.id);
-            }} style={{ marginTop: -8, marginBottom: 16, border: '1px solid #185fa5', borderRadius: 8, padding: '8px 12px', color: '#185fa5', background: '#fff', cursor: 'pointer' }}>建立新專案</button>
+            {sources.length > 0 && (
+              <label style={{ display: 'block', marginBottom: 18, fontSize: 13, color: '#555' }}>
+                使用已儲存的資料來源
+                <HelpTip>已儲存來源可重複用於這個專案。選取它會讓這次建立的資料模型綁定到該資料庫或試算表。</HelpTip>
+                <select value={sourceId || ''} onChange={(event) => {
+                  const source = sources.find((item) => item.id === event.target.value);
+                  setSourceId(source?.id || null);
+                  if (!source) return;
+                  setSourceType(source.source_type);
+                  setSourcePath(source.config.path || '');
+                  if (source.source_type === 'postgresql') setPostgresConfig({ host: source.config.host || '', port: String(source.config.port || 5432), database: source.config.database || '', username: source.config.username || '', credential_ref: source.config.credential_ref || '' });
+                  if (source.source_type === 'google_sheets') setGoogleSheetsConfig({ spreadsheet_id: source.config.spreadsheet_id || '', credential_ref: source.config.credential_ref || '' });
+                }} style={{ display: 'block', width: '100%', marginTop: 6, padding: '9px 11px', border: '1px solid #d8d8d8', borderRadius: 7 }}>
+                  <option value="">新增或本次臨時使用資料來源</option>
+                  {sources.filter((source) => source.active).map((source) => <option key={source.id} value={source.id}>{source.name}（{source.source_type}）</option>)}
+                </select>
+                <div style={{ marginTop: 5, color: '#667085', fontSize: 12 }}>選擇後按「連線並讀取結構」，再選擇要建模的資料表。</div>
+              </label>
+            )}
 
             <div
             style={{
@@ -467,7 +512,8 @@ async function startBuild() {
                 marginBottom: 8,
             }}
             >
-            Data Source
+            新增資料來源
+            <HelpTip>只有在尚未選擇已儲存來源時需要設定。憑證不會儲存於 Mapping 或瀏覽器。</HelpTip>
             </div>
 
             <div
@@ -485,7 +531,7 @@ async function startBuild() {
             ].map((type) => (
                 <button
                 key={type}
-                onClick={() => setSourceType(type)}
+                onClick={() => { setSourceType(type); setSourceId(null); setSchema(null); }}
                 style={{
                     border:
                     sourceType === type
@@ -515,30 +561,9 @@ async function startBuild() {
             {/* SQLite 設定 */}
             {sourceType === 'sqlite' && (
             <>
-            {sources.length > 0 && (
-            <label style={{ display: 'block', marginBottom: 14, fontSize: 13, color: '#555' }}>
-                已儲存資料來源
-                <select
-                value={sourceId || ''}
-                onChange={(event) => {
-                    const source = sources.find((item) => item.id === event.target.value);
-                    setSourceId(source?.id || null);
-                    if (source) {
-                    setSourceType(source.source_type);
-                    setSourcePath(source.config.path || '');
-                    if (source.source_type === 'postgresql') setPostgresConfig({ host: source.config.host || '', port: String(source.config.port || 5432), database: source.config.database || '', username: source.config.username || '', credential_ref: source.config.credential_ref || '' });
-                    if (source.source_type === 'google_sheets') setGoogleSheetsConfig({ spreadsheet_id: source.config.spreadsheet_id || '', credential_ref: source.config.credential_ref || '' });
-                    }
-                }}
-                style={{ display: 'block', width: '100%', marginTop: 6, padding: '9px 11px', border: '1px solid #d8d8d8', borderRadius: 7 }}
-                >
-                <option value="">使用未儲存的路徑</option>
-                {sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
-                </select>
-            </label>
-            )}
             <Input
-                label="SQLite Path"
+                label="SQLite 檔案路徑"
+                help="本機或伺服器可讀取的 .db 檔路徑。若只是測試，可不儲存來源直接繼續。"
                 value={sourcePath}
                 onChange={(value) => {
                 setSourcePath(value);
@@ -663,6 +688,9 @@ async function startBuild() {
     if (step === 1) {
     return (
         <Card title="Source Schema">
+        <StepIntro title="選擇要放進知識圖譜的資料">
+          系統已預設選取全部資料表。勾選的資料表會成為後續可命名、可連結與可查詢的資料類型；只要取消不想納入的表即可。
+        </StepIntro>
         {!schema && (
             <div
             style={{
@@ -741,7 +769,8 @@ async function startBuild() {
                     }}
                 />
 
-                使用此資料表
+                納入這份資料模型
+                <HelpTip>讀取結構後會預設選取全部資料表。取消勾選代表忽略此表；不會複製或修改原始資料。</HelpTip>
                 </label>
             </div>
 
@@ -820,7 +849,8 @@ async function startBuild() {
                     marginBottom: 8,
                     }}
                 >
-                    Foreign Keys
+                    系統偵測到的資料關聯
+                    <HelpTip>這些是資料庫已宣告的欄位對應，下一步會用它們預填關係。Google Sheets 可稍後手動建立關係。</HelpTip>
                 </div>
 
                 {table.foreign_keys.map((fk, index) => (
@@ -855,7 +885,8 @@ async function startBuild() {
                     marginBottom: 8,
                     }}
                 >
-                    Sample Data
+                    範例資料
+                    <HelpTip>僅供你確認欄位內容與格式，最多顯示少量資料列。</HelpTip>
                 </div>
 
                 <div
@@ -937,7 +968,10 @@ async function startBuild() {
 
     if (selectedEntities.length === 0) {
         return (
-        <Card title="Entity Mapping">
+        <Card title="資料類型與欄位">
+        <StepIntro title="替資料表取一個容易理解的名稱">
+          例如資料表 <code>asset_records</code> 可以叫做「資產」。接著確認每筆資料的唯一編號，並決定哪些欄位要顯示在圖譜中。
+        </StepIntro>
             <div
             style={{
                 padding: 14,
@@ -953,7 +987,14 @@ async function startBuild() {
     }
 
     return (
-        <Card title="Entity Mapping">
+        <Card title="資料類型與欄位">
+        <StepIntro title="替資料表取一個容易理解的名稱">
+          例如資料表 <code>asset_records</code> 可以叫做「資產」。接著確認每筆資料的唯一編號，並決定哪些欄位要顯示在圖譜中。
+        </StepIntro>
+        <div style={{ margin: '-4px 0 18px', padding: '10px 12px', borderRadius: 7, background: '#f7f7f7', color: '#475467', fontSize: 13 }}>
+          本次資料模型固定使用：<strong>{sourceId ? (sources.find((source) => source.id === sourceId)?.name || sourceType) : `${sourceType}（本次使用）`}</strong>。
+          若要使用另一個來源，請回到第一步重新開始一份資料模型。
+        </div>
         {selectedEntities.map((entity) => {
             const entityIndex = entities.findIndex(
             (item) =>
@@ -980,13 +1021,6 @@ async function startBuild() {
                 {entity.sourceTable}
                 </div>
 
-                <label style={{ display: 'block', marginBottom: 14, fontSize: 13, color: '#555' }}>資料來源
-                <select value={entity.sourceId || ''} onChange={(event) => { const next = structuredClone(entities); next[entityIndex].sourceId = event.target.value || null; setEntities(next); }} style={{ display: 'block', width: '100%', marginTop: 6, padding: '9px 11px', border: '1px solid #d8d8d8', borderRadius: 7 }}>
-                    <option value="">使用目前 Builder 資料來源</option>
-                    {sources.filter((source) => source.active).map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
-                </select>
-                </label>
-
                 <div
                 style={{
                     display: 'grid',
@@ -997,7 +1031,8 @@ async function startBuild() {
                 }}
                 >
                 <Input
-                    label="Entity Name"
+                    label="資料類型代號"
+                    help="供系統與 API 使用的英文代號，例如 Asset。建議不要有空格。"
                     value={entity.entity}
                     onChange={(value) => {
                     const next = structuredClone(
@@ -1012,7 +1047,8 @@ async function startBuild() {
                 />
 
                 <Input
-                    label="Entity Label"
+                    label="顯示名稱"
+                    help="介面上顯示給使用者看的名稱，例如「資產」。"
                     value={entity.label}
                     onChange={(value) => {
                     const next = structuredClone(
@@ -1027,7 +1063,8 @@ async function startBuild() {
                 />
 
                 <Input
-                    label="Node Label"
+                    label="圖譜節點標籤"
+                    help="進階設定：圖譜中的技術標籤。一般可沿用資料類型代號。"
                     value={entity.nodeLabel}
                     onChange={(value) => {
                     const next = structuredClone(
@@ -1042,7 +1079,8 @@ async function startBuild() {
                 />
 
                 <Input
-                    label="Primary Key"
+                    label="唯一編號欄位"
+                    help="用來辨識每一筆資料。不可為空，且應避免重複；例如 id、asset_code。"
                     value={entity.primaryKey}
                     onChange={(value) => {
                     const next = structuredClone(
@@ -1064,7 +1102,8 @@ async function startBuild() {
                     marginBottom: 8,
                 }}
                 >
-                Property Mapping
+                要顯示的欄位
+                <HelpTip>左側是原始欄位；中間是它在知識圖譜中的名稱。名稱可調整，但原始欄位不會被修改。</HelpTip>
                 </div>
 
                 <div
@@ -1093,7 +1132,7 @@ async function startBuild() {
                     color: '#777',
                     }}
                 >
-                    Semantic Property
+                    圖譜欄位名稱
                 </div>
 
                 <div
@@ -1102,7 +1141,7 @@ async function startBuild() {
                     color: '#777',
                     }}
                 >
-                    Type
+                    資料格式
                 </div>
 
                 {entity.properties.map(
@@ -1226,7 +1265,7 @@ async function startBuild() {
 
     if (selectedEntities.length === 0) {
         return (
-        <Card title="Relation Mapping">
+        <Card title="資料之間的關係">
             <div
             style={{
                 padding: 14,
@@ -1241,31 +1280,13 @@ async function startBuild() {
         );
     }
 
-    const entitiesWithRelations = selectedEntities.filter(
-        (entity) =>
-        entity.relations &&
-        entity.relations.length > 0
-    );
-
-    if (entitiesWithRelations.length === 0) {
-        return (
-        <Card title="Relation Mapping">
-            <div
-            style={{
-                padding: 14,
-                background: '#f7f7f7',
-                borderRadius: 8,
-                color: '#777',
-            }}
-            >
-            目前選擇的資料表沒有 Foreign Key，因此沒有自動產生 Relation。
-            </div>
-        </Card>
-        );
-    }
+    const entitiesWithRelations = selectedEntities;
 
     return (
-        <Card title="Relation Mapping">
+        <Card title="資料之間的關係">
+        <StepIntro title="確認「哪個欄位連到哪一筆資料」">
+          系統已依資料庫關聯預填。你主要只需要確認來源欄位、目標資料類型與目標的唯一編號；其他命名設定可保留預設值。
+        </StepIntro>
         <div
             style={{
             marginBottom: 16,
@@ -1273,8 +1294,7 @@ async function startBuild() {
             color: '#666',
             }}
         >
-            系統會根據 SQLite Foreign Key 自動建立初始 Relation Mapping，
-            你可以再修改 Relationship Type、Target Entity 等設定。
+            系統會根據資料庫關聯自動預填。若沒有偵測到關係（例如 Google Sheets），請按「新增關係」後選擇兩側要比對的欄位。
         </div>
 
         {entitiesWithRelations.map((entity) => {
@@ -1311,9 +1331,25 @@ async function startBuild() {
                 >
                     ({entity.sourceTable})
                 </span>
+                <button
+                  onClick={() => {
+                    const next = structuredClone(entities);
+                    next[entityIndex].relations = [...(next[entityIndex].relations || []), {
+                      name: 'related_to', label: '關聯到', relationshipType: 'RELATED_TO',
+                      foreignKey: '', targetEntity: selectedEntities.find((item) => item.entity !== entity.entity)?.entity || entity.entity,
+                      targetKey: 'id', displayProperty: 'name',
+                    }];
+                    setEntities(next);
+                  }}
+                  style={{ float: 'right', border: '1px solid #185fa5', borderRadius: 7, padding: '6px 9px', color: '#185fa5', background: '#fff', cursor: 'pointer', fontSize: 12 }}
+                >
+                  ＋ 新增關係
+                </button>
                 </div>
 
-                {entity.relations.map(
+                {entity.relations?.length === 0 && <div style={{ padding: 12, borderRadius: 7, background: '#f7f7f7', color: '#667085', fontSize: 13 }}>尚未設定關係。若這個資料類型需要連到其他資料，請按右上角「新增關係」。</div>}
+
+                {entity.relations?.map(
                 (relation, relationIndex) => (
                     <div
                     key={`${entity.sourceTable}-${relationIndex}`}
@@ -1325,6 +1361,21 @@ async function startBuild() {
                         background: '#fafafa',
                     }}
                     >
+                    <div style={{ position: 'relative', marginBottom: 12, padding: '10px 36px 10px 12px', borderRadius: 7, background: '#eef6ff', color: '#344054', fontSize: 13 }}>
+                      <strong>目前的對應：</strong> {entity.entity}.<code>{relation.foreignKey || '來源欄位'}</code> → {relation.targetEntity || '目標資料類型'}.<code>{relation.targetKey || '唯一編號欄位'}</code>
+                      <button
+                        onClick={() => {
+                          const next = structuredClone(entities);
+                          next[entityIndex].relations.splice(relationIndex, 1);
+                          setEntities(next);
+                        }}
+                        aria-label="刪除這個關係"
+                        title="刪除這個關係"
+                        style={{ position: 'absolute', top: 7, right: 7, width: 24, height: 24, border: 0, borderRadius: '50%', color: '#b42318', background: 'transparent', cursor: 'pointer', fontSize: 19, lineHeight: '22px' }}
+                      >
+                        ×
+                      </button>
+                    </div>
                     <div
                         style={{
                         display: 'grid',
@@ -1333,7 +1384,9 @@ async function startBuild() {
                         }}
                     >
                         <Input
-                        label="Relation Name"
+                        label="關係代號"
+                        help="進階設定：供系統識別關係的英文名稱，例如 belongs_to。通常可沿用預設值。"
+                        containerStyle={{ order: 5 }}
                         value={relation.name}
                         onChange={(value) => {
                             const next =
@@ -1350,7 +1403,9 @@ async function startBuild() {
                         />
 
                         <Input
-                        label="Relation Label"
+                        label="關係顯示名稱"
+                        help="在圖譜上顯示的關係名稱，例如「屬於」。通常可沿用預設值。"
+                        containerStyle={{ order: 6 }}
                         value={relation.label}
                         onChange={(value) => {
                             const next =
@@ -1367,7 +1422,9 @@ async function startBuild() {
                         />
 
                         <Input
-                        label="Relationship Type"
+                        label="圖譜關係類型"
+                        help="進階設定：圖譜內部使用的技術名稱，例如 BELONGS_TO。通常不需要修改。"
+                        containerStyle={{ order: 7 }}
                         value={relation.relationshipType}
                         onChange={(value) => {
                             const next =
@@ -1385,7 +1442,9 @@ async function startBuild() {
                         />
 
                         <Input
-                        label="Foreign Key"
+                        label="來源欄位"
+                        help="目前資料表中，用來存放「目標資料唯一編號」的欄位，例如 Asset.category_id。"
+                        containerStyle={{ order: 1 }}
                         value={relation.foreignKey}
                         onChange={(value) => {
                             const next =
@@ -1402,7 +1461,7 @@ async function startBuild() {
                         }}
                         />
 
-                        <div>
+                        <div style={{ order: 2 }}>
                         <div
                             style={{
                             fontSize: 13,
@@ -1410,7 +1469,8 @@ async function startBuild() {
                             marginBottom: 6,
                             }}
                         >
-                            Target Entity
+                            要連到的資料類型
+                            <HelpTip>選擇來源欄位指向的資料類型，例如 Asset.category_id 指向 Category。</HelpTip>
                         </div>
 
                         <select
@@ -1457,7 +1517,9 @@ async function startBuild() {
                         </div>
 
                         <Input
-                        label="Target Key"
+                        label="目標的唯一編號欄位"
+                        help="目標資料類型中用來比對的欄位，通常是 id。來源欄位的值必須能在這個欄位找到。"
+                        containerStyle={{ order: 3 }}
                         value={relation.targetKey}
                         onChange={(value) => {
                             const next =
@@ -1475,7 +1537,9 @@ async function startBuild() {
                         />
 
                         <Input
-                        label="Display Property"
+                        label="關係顯示欄位"
+                        help="展開關係時，目標資料要顯示哪個欄位，例如名稱 name。"
+                        containerStyle={{ order: 4 }}
                         value={
                             relation.displayProperty
                         }
@@ -1504,7 +1568,7 @@ async function startBuild() {
                         fontSize: 13,
                         }}
                     >
-                        <strong>Preview</strong>
+                        <strong>使用者看到的關係</strong>
 
                         <div
                         style={{
@@ -1512,11 +1576,7 @@ async function startBuild() {
                             color: '#666',
                         }}
                         >
-                        {entity.entity}
-                        {' --['}
-                        {relation.relationshipType}
-                        {']→ '}
-                        {relation.targetEntity}
+                        每筆 {entity.entity} 的 <code>{relation.foreignKey}</code> 會連到 {relation.targetEntity} 的 <code>{relation.targetKey}</code>。
                         </div>
 
                         <div
@@ -1526,10 +1586,7 @@ async function startBuild() {
                             fontSize: 12,
                         }}
                         >
-                        FK: {relation.foreignKey}
-                        {' → '}
-                        {relation.targetEntity}.
-                        {relation.targetKey}
+                        圖譜會顯示為「{entity.entity} {relation.label || relation.name} {relation.targetEntity}」。
                         </div>
                     </div>
                     </div>
@@ -1567,10 +1624,13 @@ async function startBuild() {
 
     return (
         <>
+        <StepIntro title="最後確認模型會如何讀取資料">
+          這裡會顯示資料類型、欄位與關係的摘要。發布前仍會檢查唯一編號、欄位與關係是否能在來源資料中找到。
+        </StepIntro>
         {/* ==========================================
             Graph Structure Preview
         ========================================== */}
-        <Card title="Knowledge Graph Preview">
+        <Card title="資料模型預覽">
             <div
             style={{
                 fontSize: 13,
@@ -1578,7 +1638,7 @@ async function startBuild() {
                 marginBottom: 18,
             }}
             >
-            以下是目前設定預計建立到 Neo4j 的 Entity 與 Relation。
+            以下是目前設定預計投影到知識圖譜的資料類型與關係，不會複製或修改原始資料。
             </div>
 
             {/* Entities */}
@@ -1804,7 +1864,10 @@ async function startBuild() {
         {/* ==========================================
             YAML Preview
         ========================================== */}
-        <Card title="Generated Mapping">
+        <Card title="進階設定預覽">
+        <StepIntro title="這是系統使用的 Mapping 設定">
+          一般不需要直接修改；它用來讓平台日後以相同方式讀取資料。上方的可讀摘要才是主要確認內容。
+        </StepIntro>
             {selectedEntities.map((entity) => {
             const preview = {
                 entity: entity.entity,
@@ -1921,7 +1984,10 @@ async function startBuild() {
     );
 
     return (
-        <Card title="發布 Mapping">
+        <Card title="確認並發布資料模型">
+        <StepIntro title="發布不會修改原始資料">
+          系統只會儲存這份模型設定，並從來源即時投影圖譜。發布前會檢查欄位、唯一編號、重複資料與關係是否可對應。
+        </StepIntro>
         <div
             style={{
             marginBottom: 16,
@@ -1929,7 +1995,7 @@ async function startBuild() {
             color: '#666',
             }}
         >
-            將儲存並發布目前 Mapping。圖譜會從來源資料庫即時投影，不會複製到 Neo4j。
+            將儲存並發布目前設定。圖譜會從來源即時投影，不會複製或修改原始資料。
         </div>
 
         <div
@@ -1946,19 +2012,19 @@ async function startBuild() {
                 marginBottom: 8,
             }}
             >
-            Build Summary
+            你即將建立的資料模型
             </div>
 
             <div style={{ fontSize: 13, marginBottom: 4 }}>
-            Knowledge Name：{knowledgeName}
+            名稱：{knowledgeName}
             </div>
 
             <div style={{ fontSize: 13, marginBottom: 4 }}>
-            Source：{sourceType}
+            資料來源：{sourceId ? (sources.find((source) => source.id === sourceId)?.name || sourceType) : `${sourceType}（本次使用）`}
             </div>
 
             <div style={{ fontSize: 13, marginBottom: 4 }}>
-            模式：唯讀圖譜投影
+            模式：唯讀圖譜投影（不修改原始資料）
             </div>
 
             <div style={{ fontSize: 13 }}>
