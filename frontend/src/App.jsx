@@ -12,6 +12,7 @@ import ProjectAskPage from './pages/ProjectAskPage';
 import ProjectOverviewPage from './pages/ProjectOverviewPage';
 import MappingVersionsPage from './pages/MappingVersionsPage';
 import SourcesPage from './pages/SourcesPage';
+import IdentityMappingsPage from './pages/IdentityMappingsPage';
 
 function App() {
   return (
@@ -33,6 +34,7 @@ function App() {
             <Route index element={<ProjectOverviewPage />} />
             <Route path="mappings" element={<MappingVersionsPage />} />
             <Route path="sources" element={<SourcesPage />} />
+            <Route path="identity-mappings" element={<IdentityMappingsPage />} />
             <Route path="build" element={<ProjectBuildPage />} />
             <Route path="graph" element={<ProjectGraphPage />} />
             <Route path="ask" element={<ProjectAskPage />} />

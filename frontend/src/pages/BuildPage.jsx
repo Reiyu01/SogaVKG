@@ -180,8 +180,10 @@ export default function BuildPage({ projectId: fixedProjectId }) {
       setSources((items) => [source, ...items.filter((item) => item.id !== source.id)]);
       setSourceId(source.id);
       if (source.source_type === 'sqlite') setSourcePath(source.config.path);
+      return source;
     } catch (err) {
       setSchemaError(err.message);
+      return null;
     } finally {
       setSourceSaving(false);
     }
@@ -332,6 +334,16 @@ async function startBuild() {
   setJobId(null);
 
   try {
+    // SQLite may be used once with an ad-hoc file path. Other adapters need a
+    // durable source profile so validation, preview, and graph projection can
+    // reopen the connection after this browser session.
+    let activeSourceId = sourceId;
+    if (!activeSourceId && sourceType !== 'sqlite') {
+      const savedSource = await saveSourceProfile();
+      if (!savedSource) throw new Error('無法儲存資料來源，請確認連線設定後再發布。');
+      activeSourceId = savedSource.id;
+    }
+
     const selectedEntities = entities.filter(
       (entity) => selectedTables.includes(mappingKey(entity))
     );
@@ -361,7 +373,7 @@ async function startBuild() {
           source_type: entity.sourceType,
           source_table: entity.sourceTable,
           primary_key: entity.primaryKey,
-          ...(entity.sourceId ? { source_id: entity.sourceId } : {}),
+          ...(entity.sourceId || activeSourceId ? { source_id: entity.sourceId || activeSourceId } : {}),
         },
         properties: Object.fromEntries(entity.properties.map((property) => [
           property.property,
@@ -394,7 +406,7 @@ async function startBuild() {
 
     const validationRes = await fetch(apiUrl(`/builder/projects/${projectId}/validate-mappings`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_path: sourcePath || null, source_id: sourceId, project_id: projectId }),
+      body: JSON.stringify({ source_path: sourcePath || null, source_id: activeSourceId, project_id: projectId }),
     });
     if (!validationRes.ok) {
       throw new Error(await validationRes.text() || `驗證 Mapping 失敗（HTTP ${validationRes.status}）`);
@@ -406,7 +418,7 @@ async function startBuild() {
     }
     const previewRes = await fetch(apiUrl(`/builder/projects/${projectId}/build-preview`), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_path: sourcePath || null, source_id: sourceId, project_id: projectId }),
+      body: JSON.stringify({ source_path: sourcePath || null, source_id: activeSourceId, project_id: projectId }),
     });
     if (!previewRes.ok) throw new Error(await previewRes.text());
     const previewResult = await previewRes.json();
@@ -425,7 +437,7 @@ async function startBuild() {
         },
         body: JSON.stringify({
           source_path: sourcePath || null,
-          source_id: sourceId,
+          source_id: activeSourceId,
           project_id: projectId,
         }),
       }

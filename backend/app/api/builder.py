@@ -28,6 +28,7 @@ from typing import Any
 from app.services.mapping_service import MappingService
 from app.services.data_quality import preview_mappings_by_source
 from app.services.source_resolution import resolve_entity_source_adapters
+from app.services.entity_alignment import preview_entity_alignment
 from app.adapters.source_adapter import create_source_adapter
 from app.repositories.platform_state import PlatformStateRepository
 
@@ -79,6 +80,16 @@ class MappingRequest(BaseModel):
 class MappingReplaceRequest(BaseModel):
     project_id: str
     mappings: list[MappingRequest] = Field(min_length=1)
+
+class EntityAlignmentRequest(BaseModel):
+    project_id: str
+    source_entity: str
+    target_entity: str
+    source_column: str
+    target_column: str
+    label: str = "同一概念"
+    relation_type: str = "CONCEPT_EQUIVALENT_TO"
+    normalization_rule: str = "exact"
 
 # ======================================================
 # Helpers
@@ -233,10 +244,13 @@ def validate_mappings(project_id: str, request: BuildRequest):
     for entity, mapping in mapper.mappings.items():
         adapter = source_adapters[entity]
         ingestion = mapping.get("ingestion", {}); table = ingestion.get("source_table")
-        tables = {item["name"] for item in adapter.inspect_schema()["tables"]}
-        if not table or table not in tables:
-            errors.append(f"{entity}: source_table '{table}' does not exist"); continue
-        columns = adapter.table_columns(table); primary_key = ingestion.get("primary_key", "id")
+        if not table:
+            errors.append(f"{entity}: source_table is required"); continue
+        try:
+            columns = adapter.table_columns(table)
+        except Exception as error:
+            errors.append(f"{entity}: source_table '{table}' cannot be read: {error}"); continue
+        primary_key = ingestion.get("primary_key", "id")
         if primary_key not in columns:
             errors.append(f"{entity}: primary_key '{primary_key}' does not exist in {table}")
         else:
@@ -381,8 +395,75 @@ def replace_mappings(request: MappingReplaceRequest):
         raise HTTPException(status_code=400, detail="Every mapping must belong to project_id")
 
     mappings = [mapping.model_dump() for mapping in request.mappings]
-    get_mapping_service(request.project_id).replace_all(mappings)
-    return {"status": "replaced", "project_id": request.project_id, "count": len(mappings)}
+    # A Builder run describes one source-backed model. Keep previously created
+    # entity types in the project so a second source can add GoogleSheetAsset
+    # beside the existing Asset model.
+    existing = {item["entity"]: item for item in get_mapping_service(request.project_id).list_mappings()}
+    existing.update({item["entity"]: item for item in mappings})
+    get_mapping_service(request.project_id).replace_all(list(existing.values()))
+    return {"status": "saved", "project_id": request.project_id, "count": len(mappings), "project_entity_count": len(existing)}
+
+
+@router.get("/entity-alignments")
+def list_entity_alignments(project_id: str):
+    if state_repository.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"alignments": state_repository.list_entity_alignments(project_id)}
+
+
+@router.get("/entity-alignments/audit-events")
+def list_entity_alignment_audit_events(project_id: str):
+    if state_repository.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"events": state_repository.list_entity_alignment_audit_events(project_id)}
+
+
+def entity_alignment_preview(request: EntityAlignmentRequest) -> dict[str, Any]:
+    if state_repository.get_project(request.project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if request.source_entity == request.target_entity:
+        raise HTTPException(status_code=400, detail="Identity mapping must connect two different entity types")
+    mapper = get_mapper(request.project_id)
+    try:
+        source_mapping = mapper.get_entity(request.source_entity)
+        target_mapping = mapper.get_entity(request.target_entity)
+        adapters = resolve_entity_source_adapters(mapper, state_repository.list_sources(request.project_id))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    source_columns = {item.get("column") for item in source_mapping.get("properties", {}).values()} | {source_mapping.get("ingestion", {}).get("primary_key", "id")}
+    target_columns = {item.get("column") for item in target_mapping.get("properties", {}).values()} | {target_mapping.get("ingestion", {}).get("primary_key", "id")}
+    if request.source_column not in source_columns or request.target_column not in target_columns:
+        raise HTTPException(status_code=400, detail="Identity mapping fields must be mapped source columns")
+    try:
+        return preview_entity_alignment(source_mapping, target_mapping, adapters[request.source_entity], adapters[request.target_entity], request.source_column, request.target_column, request.normalization_rule)
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=f"Could not preview Identity Mapping: {error}") from error
+
+
+@router.post("/entity-alignments/preview")
+def preview_entity_alignment_endpoint(request: EntityAlignmentRequest):
+    return entity_alignment_preview(request)
+
+
+@router.post("/entity-alignments")
+def save_entity_alignment(request: EntityAlignmentRequest):
+    preview = entity_alignment_preview(request)
+    if not preview["one_to_one_valid"]:
+        raise HTTPException(status_code=409, detail={"message": "Identity Mapping 未通過一對一驗證。", "preview": preview})
+    return state_repository.save_entity_alignment({
+        "id": str(uuid.uuid4()), "project_id": request.project_id,
+        "source_entity": request.source_entity, "target_entity": request.target_entity,
+        "source_column": request.source_column, "target_column": request.target_column,
+        "label": request.label, "relation_type": request.relation_type,
+        "normalization_rule": request.normalization_rule,
+    })
+
+
+@router.delete("/entity-alignments/{alignment_id}")
+def delete_entity_alignment(alignment_id: str, project_id: str):
+    if not state_repository.delete_entity_alignment(project_id, alignment_id):
+        raise HTTPException(status_code=404, detail="Identity mapping not found")
+    return {"status": "deleted", "id": alignment_id}
 
 
 # ======================================================
@@ -506,7 +587,7 @@ def start_build(
         mapper,
         resolve_entity_source_adapters(mapper, state_repository.list_sources(request.project_id)),
     )
-    version = state_repository.create_mapping_version(request.project_id, list(mapper.mappings.values()))
+    version = state_repository.create_mapping_version(request.project_id, list(mapper.mappings.values()), state_repository.list_entity_alignments(request.project_id))
     job = create_job(source_id=source_id, project_id=request.project_id)
     job.mapping_version_id = version["id"]
     job.status = "done"

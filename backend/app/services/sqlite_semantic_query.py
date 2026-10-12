@@ -12,6 +12,7 @@ from typing import Any
 from app.adapters.source_adapter import SQLiteSourceAdapter, SourceAdapter
 from app.schemas.semantic_query import SemanticQuery
 from app.semantic.mapper import SemanticMapper
+from app.services.entity_alignment import normalize_identity_key
 
 
 class SemanticQueryService:
@@ -99,6 +100,54 @@ class SemanticQueryService:
             rows.sort(key=lambda row: (self._value(query.entity, query.order_by.field, row) is None, self._value(query.entity, query.order_by.field, row)), reverse=query.order_by.direction == "DESC")
         data = [{field: self._value(query.entity, field, row) for field in fields} for row in rows[:query.limit]]
         return {"data": data, "count": len(data)}
+
+    def execute_with_identity_mappings(self, query: SemanticQuery, entity_alignments: list[dict[str, Any]]) -> dict[str, Any]:
+        """Attach matched records from aligned concepts without merging values."""
+        mapping = self.mapper.get_entity(query.entity)
+        rows = self.source_for_entity(query.entity).read_rows(self._table(mapping))
+        for item in query.filters:
+            rows = [row for row in rows if self._matches(self._value(query.entity, item.field, row), item.operator, item.value)]
+        if query.order_by:
+            rows.sort(key=lambda row: (self._value(query.entity, query.order_by.field, row) is None, self._value(query.entity, query.order_by.field, row)), reverse=query.order_by.direction == "DESC")
+        rows = rows[:query.limit]
+        fields = query.fields or list(mapping.get("properties", {}).keys())
+        result = {"data": [{field: self._value(query.entity, field, row) for field in fields} for row in rows], "count": len(rows)}
+        matches = []
+        for alignment in entity_alignments:
+            if query.entity not in (alignment["source_entity"], alignment["target_entity"]):
+                continue
+            forward = alignment["source_entity"] == query.entity
+            other_entity = alignment["target_entity"] if forward else alignment["source_entity"]
+            local_column = alignment["source_column"] if forward else alignment["target_column"]
+            other_column = alignment["target_column"] if forward else alignment["source_column"]
+            other_mapping = self.mapper.get_entity(other_entity)
+            other_rows = self.source_for_entity(other_entity).read_rows(self._table(other_mapping))
+            rule = alignment.get("normalization_rule", "exact")
+            by_key = {normalize_identity_key(row.get(other_column), rule): row for row in other_rows if row.get(other_column) not in (None, "")}
+            for row in rows:
+                raw_key = row.get(local_column)
+                key = normalize_identity_key(raw_key, rule)
+                other_row = by_key.get(key) if key not in (None, "") else None
+                if other_row is None:
+                    continue
+                base_record = self._provenanced_record(query.entity, mapping, row)
+                aligned_record = self._provenanced_record(other_entity, other_mapping, other_row)
+                matches.append({"identity_mapping_id": alignment["id"], "identity_key": key, "normalization_rule": rule, "records": [base_record, aligned_record], "field_conflicts": self._field_conflicts(base_record, aligned_record)})
+        result["identity_expansion"] = {"enabled": True, "matched_record_count": len(matches), "matches": matches}
+        return result
+
+    @staticmethod
+    def _provenanced_record(entity: str, mapping: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+        return {"entity": entity, "data": {name: row.get(definition.get("column")) for name, definition in mapping.get("properties", {}).items()}}
+
+    @staticmethod
+    def _field_conflicts(left: dict[str, Any], right: dict[str, Any]) -> list[dict[str, Any]]:
+        conflicts = []
+        for field in set(left["data"]) & set(right["data"]):
+            left_value, right_value = left["data"][field], right["data"][field]
+            if left_value not in (None, "") and right_value not in (None, "") and left_value != right_value:
+                conflicts.append({"field": field, "values": [{"entity": left["entity"], "value": left_value}, {"entity": right["entity"], "value": right_value}]})
+        return conflicts
 
 
 class SQLiteSemanticQueryService(SemanticQueryService):

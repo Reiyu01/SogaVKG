@@ -1,0 +1,36 @@
+project_id: 6c37d650-345a-4fbe-a1c0-f63bd93488ed
+entity: 實驗專案整合
+label: 實驗專案_整合
+source:
+  node_label: 實驗專案整合
+ingestion:
+  source_type: google_sheets
+  source_table: 實驗專案_整合
+  primary_key: id
+  source_id: 5ad6f9f6-6ec6-45b2-ab40-80b481ccff82
+properties:
+  專案編號:
+    column: 專案編號
+    type: string
+  專案名稱:
+    column: 專案名稱
+    type: string
+  專案類型:
+    column: 專案類型
+    type: string
+  主持人編號:
+    column: 主持人編號
+    type: string
+  開始日期:
+    column: 開始日期
+    type: string
+  結束日期:
+    column: 結束日期
+    type: string
+  研究領域:
+    column: 研究領域
+    type: string
+  專案狀態:
+    column: 專案狀態
+    type: string
+relations: {}

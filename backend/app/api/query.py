@@ -108,6 +108,7 @@ def get_nl_graph(project_id: str) -> NLQueryGraph:
     mapper = get_mapper(project_id)
     return NLQueryGraph(
         mapper=mapper, query_service=get_service(project_id), project_id=project_id,
+        entity_alignments=state_repository.list_entity_alignments(project_id),
     )
 
 
@@ -130,6 +131,7 @@ def query(
 class NLQueryRequest(BaseModel):
     question: str
     project_id: str
+    expand_identity_mappings: bool = False
 
 class DeactivateNodesRequest(BaseModel):
     project_id: str
@@ -142,7 +144,7 @@ def ask(
     request: NLQueryRequest,
 ):
     return get_nl_graph(request.project_id).run(
-        request.question
+        request.question, request.expand_identity_mappings
     )
 
 @router.post("/graph/deactivate")
@@ -208,6 +210,17 @@ def get_graph(project_id: str):
                     ),
                 }
             )
+    for alignment in state_repository.list_entity_alignments(project_id):
+        edges.append({
+            "source": alignment["source_entity"],
+            "target": alignment["target_entity"],
+            "label": alignment["label"],
+            "relationship_type": alignment["relation_type"],
+            "identity_mapping": {
+                "source_column": alignment["source_column"],
+                "target_column": alignment["target_column"],
+            },
+        })
 
     return {
         "nodes": nodes,

@@ -1,5 +1,10 @@
 from dotenv import load_dotenv
-load_dotenv()
+from pathlib import Path
+
+# Resolve credentials relative to the backend itself, rather than the shell's
+# current directory.  This keeps source credential references working whether
+# uvicorn is launched from `backend/` or from the repository root.
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 
 from fastapi import FastAPI
 from app.api.builder import router as builder_router

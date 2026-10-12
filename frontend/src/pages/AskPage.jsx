@@ -119,6 +119,15 @@ function AssistantBubble({ item }) {
 
             <ResultTable rows={item.result.data} />
 
+            {item.result.identity_expansion && <details style={{ marginTop: '10px', fontSize: '12px' }}>
+              <summary style={{ cursor: 'pointer', color: '#185fa5' }}>同概念來源：找到 {item.result.identity_expansion.matched_record_count} 筆對應資料</summary>
+              {item.result.identity_expansion.matches.map((match, index) => <div key={index} style={{ marginTop: 8, padding: 10, background: 'white', borderRadius: 6 }}>
+                <div>比對鍵：{String(match.identity_key)}</div>
+                {match.records.map((record) => <div key={record.entity} style={{ marginTop: 5 }}><strong>{record.entity}</strong>：{Object.entries(record.data).map(([field, value]) => `${field}=${value ?? '—'}`).join('、')}</div>)}
+                {match.field_conflicts.length > 0 && <div style={{ marginTop: 6, color: '#b42318' }}>欄位衝突：{match.field_conflicts.map((conflict) => `${conflict.field}（${conflict.values.map((value) => `${value.entity}: ${value.value}`).join(' / ')}）`).join('；')}</div>}
+              </div>)}
+            </details>}
+
             <details style={{ marginTop: '10px', fontSize: '12px' }}>
               <summary style={{ cursor: 'pointer', color: '#888' }}>查看查詢細節</summary>
               <pre
@@ -210,6 +219,7 @@ function AssistantBubble({ item }) {
 export default function AskPage({ projectId }) {
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState([]);
+  const [expandIdentityMappings, setExpandIdentityMappings] = useState(false);
 
   const bottomRef = useRef(null);
 
@@ -233,7 +243,7 @@ export default function AskPage({ projectId }) {
       const res = await fetch(ASK_API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: q, project_id: projectId }),
+        body: JSON.stringify({ question: q, project_id: projectId, expand_identity_mappings: expandIdentityMappings }),
       });
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -347,6 +357,10 @@ export default function AskPage({ projectId }) {
           borderTop: '1px solid #eee',
         }}
       >
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#475467', whiteSpace: 'nowrap' }}>
+          <input type="checkbox" checked={expandIdentityMappings} onChange={(event) => setExpandIdentityMappings(event.target.checked)} />
+          展開同概念來源
+        </label>
         <input
           type="text"
           value={question}

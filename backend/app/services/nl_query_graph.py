@@ -99,6 +99,7 @@ class GraphState(TypedDict, total=False):
     error: str | None
     attempts: int
     result: dict[str, Any]
+    expand_identity_mappings: bool
 
 
 class NLQueryGraph:
@@ -109,11 +110,12 @@ class NLQueryGraph:
       - 使用者想查資料 -> 模型呼叫工具，走原本的驗證/執行/重試流程
     """
 
-    def __init__(self, mapper: SemanticMapper, query_service: QueryService, project_id: str | None = None):
+    def __init__(self, mapper: SemanticMapper, query_service: QueryService, project_id: str | None = None, entity_alignments: list[dict] | None = None):
         self.mapper = mapper
         self.query_service = query_service
         self.project_id = project_id
         self.builder = query_service
+        self.entity_alignments = entity_alignments or []
 
         self.client = OpenAI(
             base_url=os.environ["MY_MODEL_BASE_URL"],
@@ -121,7 +123,7 @@ class NLQueryGraph:
         )
         self.model_name = os.environ["MY_MODEL_NAME"]
 
-        self.schema_text = build_schema_description(mapper)
+        self.schema_text = build_schema_description(mapper, entity_alignments)
         self.graph = self._build_graph()
 
     # ------------------------------------------------------
@@ -266,16 +268,16 @@ class NLQueryGraph:
     # ------------------------------------------------------
 
     def _execute_node(self, state: GraphState) -> dict:
-        result = self.query_service.execute(state["semantic_query"], project_id=self.project_id)
+        result = self.query_service.execute_with_identity_mappings(state["semantic_query"], self.entity_alignments) if state.get("expand_identity_mappings") else self.query_service.execute(state["semantic_query"], project_id=self.project_id)
         return {"result": result}
 
     # ------------------------------------------------------
     # Public
     # ------------------------------------------------------
 
-    def run(self, question: str) -> dict:
+    def run(self, question: str, expand_identity_mappings: bool = False) -> dict:
         final_state = self.graph.invoke(
-            {"question": question, "attempts": 0}
+            {"question": question, "attempts": 0, "expand_identity_mappings": expand_identity_mappings}
         )
 
         # 純聊天回覆

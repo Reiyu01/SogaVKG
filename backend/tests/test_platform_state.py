@@ -39,6 +39,17 @@ class PlatformStateRepositoryTests(unittest.TestCase):
             })
             self.assertEqual(repository.get_job("job-1")["mapping_version_id"], "project-1:v1")
 
+    def test_identity_alignment_audit_and_mapping_version_snapshot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = PlatformStateRepository(Path(directory) / "platform.db")
+            repository.create_project({"id": "project-1", "name": "Demo"})
+            alignment = repository.save_entity_alignment({"id": "alignment-1", "project_id": "project-1", "source_entity": "Asset", "target_entity": "SheetAsset", "source_column": "code", "target_column": "code"})
+            version = repository.create_mapping_version("project-1", [{"entity": "Asset"}], [alignment])
+            repository.delete_entity_alignment("project-1", "alignment-1")
+            snapshot = repository.get_mapping_version("project-1", version["version"])
+            self.assertEqual(snapshot["entity_alignments"], [alignment])
+            self.assertEqual([event["action"] for event in repository.list_entity_alignment_audit_events("project-1")], ["deleted", "created"])
+
 
 if __name__ == "__main__":
     unittest.main()

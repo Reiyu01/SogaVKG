@@ -5,7 +5,7 @@
 from app.semantic.mapper import SemanticMapper
 
 
-def build_schema_description(mapper: SemanticMapper) -> str:
+def build_schema_description(mapper: SemanticMapper, entity_alignments: list[dict] | None = None) -> str:
     """
     把所有已載入的語義映射，轉成給 AI 看的純文字說明，
     讓 AI 知道有哪些 entity、property、relation 可以查詢。
@@ -36,4 +36,13 @@ def build_schema_description(mapper: SemanticMapper) -> str:
 
         lines.append("")  # 空行分隔
 
+    if entity_alignments:
+        lines.append("## 概念對應（不是資料列關係）")
+        for alignment in entity_alignments:
+            lines.append(
+                f"  - {alignment['source_entity']} 與 {alignment['target_entity']} 是同一概念的不同來源版本"
+                f"（{alignment['source_column']} = {alignment['target_column']}，{alignment['label']}）。"
+                "需要比對個別資料時，使用此欄位規則；保留兩邊來源資料，不可自行覆寫衝突值。"
+            )
+        lines.append("")
     return "\n".join(lines)

@@ -43,6 +43,17 @@
 - [ ] Separate source credentials from Mapping definitions.
 - [ ] Support property-to-property relation matching, not only ID foreign keys.
 - [x] Ingest multiple SQLite sources into one project.
+- [ ] Support concept-level Identity Mapping across source-backed data models.
+  - [x] Persist project-scoped entity alignments with source/target matching columns.
+  - [x] Expose `CONCEPT_EQUIVALENT_TO` edges in the conceptual graph and LLM schema description.
+  - [x] Preserve existing entity mappings when a later source-backed model is added to a project.
+  - [x] Add a project UI to create, review, and remove Identity Mappings such as `GoogleSheetAsset.asset_code ↔ Asset.asset_code`.
+  - [x] Preview exact matches, unmatched keys, null keys, and duplicate keys before publishing an Identity Mapping.
+  - [x] Validate identity cardinality (default one-to-one); block publishing when either side has duplicate non-empty keys.
+  - [x] Allow an explicit normalization rule for safe keys.
+  - [x] Make AI semantic queries optionally expand aligned concepts at query time without materializing instance-to-instance identity edges.
+  - [x] Return both source records and field-conflict provenance when an LLM query follows an Identity Mapping.
+  - [x] Add audit history and Mapping-version snapshots for Identity Mapping changes.
 - [ ] Provide Mapping templates for common domains.
 
 ## Phase 4 — Production operation and governance

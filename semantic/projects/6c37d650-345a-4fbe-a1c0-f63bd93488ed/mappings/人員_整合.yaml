@@ -1,0 +1,33 @@
+project_id: 6c37d650-345a-4fbe-a1c0-f63bd93488ed
+entity: 人員_整合
+label: 人員_整合
+source:
+  node_label: 人員整合
+ingestion:
+  source_type: google_sheets
+  source_table: 人員_整合
+  primary_key: id
+  source_id: c9cccc07-1a29-4f04-bb2e-feb4c006f868
+properties:
+  人員編號:
+    column: 人員編號
+    type: string
+  姓名:
+    column: 姓名
+    type: string
+  身分:
+    column: 身分
+    type: string
+  系所:
+    column: 系所
+    type: string
+  Email:
+    column: Email
+    type: string
+  研究領域:
+    column: 研究領域
+    type: string
+  狀態:
+    column: 狀態
+    type: string
+relations: {}

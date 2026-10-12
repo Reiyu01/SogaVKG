@@ -1,0 +1,39 @@
+project_id: 6c37d650-345a-4fbe-a1c0-f63bd93488ed
+entity: 實驗紀錄整合
+label: 實驗紀錄_整合
+source:
+  node_label: 實驗紀錄整合
+ingestion:
+  source_type: google_sheets
+  source_table: 實驗紀錄_整合
+  primary_key: id
+  source_id: 5ad6f9f6-6ec6-45b2-ab40-80b481ccff82
+properties:
+  紀錄編號:
+    column: 紀錄編號
+    type: string
+  專案編號:
+    column: 專案編號
+    type: string
+  實驗名稱:
+    column: 實驗名稱
+    type: string
+  執行人員編號:
+    column: 執行人員編號
+    type: string
+  實驗日期:
+    column: 實驗日期
+    type: string
+  實驗類型:
+    column: 實驗類型
+    type: string
+  結果:
+    column: 結果
+    type: string
+  數據位置:
+    column: 數據位置
+    type: string
+  備註:
+    column: 備註
+    type: string
+relations: {}
