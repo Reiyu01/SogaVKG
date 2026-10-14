@@ -58,6 +58,7 @@ class PlatformStateRepository:
                     version INTEGER NOT NULL,
                     mappings_json TEXT NOT NULL,
                     entity_alignments_json TEXT NOT NULL DEFAULT '[]',
+                    relation_rules_json TEXT NOT NULL DEFAULT '[]',
                     created_at TEXT NOT NULL,
                     UNIQUE(project_id, version)
                 );
@@ -82,6 +83,31 @@ class PlatformStateRepository:
                     alignment_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS relation_rules (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    source_entity TEXT NOT NULL,
+                    relation_name TEXT NOT NULL,
+                    target_entity TEXT NOT NULL,
+                    source_column TEXT NOT NULL,
+                    target_column TEXT NOT NULL,
+                    display_property TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(project_id, source_entity, relation_name)
+                );
+                CREATE TABLE IF NOT EXISTS query_audit_events (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    query_kind TEXT NOT NULL,
+                    mapping_version_id TEXT,
+                    sources_json TEXT NOT NULL,
+                    plan_json TEXT NOT NULL,
+                    result_count INTEGER,
+                    duration_ms INTEGER NOT NULL,
+                    error TEXT,
+                    created_at TEXT NOT NULL
+                );
                 """
             )
             self._add_column_if_missing(connection, "source_profiles", "project_id", "TEXT")
@@ -90,6 +116,7 @@ class PlatformStateRepository:
             self._add_column_if_missing(connection, "ingestion_jobs", "result_json", "TEXT")
             self._add_column_if_missing(connection, "ingestion_jobs", "mapping_version_id", "TEXT")
             self._add_column_if_missing(connection, "mapping_versions", "entity_alignments_json", "TEXT NOT NULL DEFAULT '[]'")
+            self._add_column_if_missing(connection, "mapping_versions", "relation_rules_json", "TEXT NOT NULL DEFAULT '[]'")
             self._add_column_if_missing(connection, "entity_alignments", "normalization_rule", "TEXT NOT NULL DEFAULT 'exact'")
 
     @staticmethod
@@ -114,12 +141,12 @@ class PlatformStateRepository:
             row = connection.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
         return dict(row) if row else None
 
-    def create_mapping_version(self, project_id: str, mappings: list[dict[str, Any]], entity_alignments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    def create_mapping_version(self, project_id: str, mappings: list[dict[str, Any]], entity_alignments: list[dict[str, Any]] | None = None, relation_rules: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         now = datetime.now(timezone.utc).isoformat()
         with self._connection() as connection:
             version = connection.execute("SELECT COALESCE(MAX(version), 0) + 1 FROM mapping_versions WHERE project_id = ?", (project_id,)).fetchone()[0]
             version_id = f"{project_id}:v{version}"
-            connection.execute("INSERT INTO mapping_versions (id, project_id, version, mappings_json, entity_alignments_json, created_at) VALUES (?, ?, ?, ?, ?, ?)", (version_id, project_id, version, json.dumps(mappings), json.dumps(entity_alignments or []), now))
+            connection.execute("INSERT INTO mapping_versions (id, project_id, version, mappings_json, entity_alignments_json, relation_rules_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", (version_id, project_id, version, json.dumps(mappings), json.dumps(entity_alignments or []), json.dumps(relation_rules if relation_rules is not None else self.list_relation_rules(project_id)), now))
         return {"id": version_id, "version": version, "created_at": now}
 
     def latest_mapping_version(self, project_id: str) -> dict[str, Any] | None:
@@ -137,7 +164,31 @@ class PlatformStateRepository:
             row = connection.execute("SELECT * FROM mapping_versions WHERE project_id = ? AND version = ?", (project_id, version)).fetchone()
         if not row:
             return None
-        return {"id": row["id"], "version": row["version"], "created_at": row["created_at"], "mappings": json.loads(row["mappings_json"]), "entity_alignments": json.loads(row["entity_alignments_json"] or "[]")}
+        return {"id": row["id"], "version": row["version"], "created_at": row["created_at"], "mappings": json.loads(row["mappings_json"]), "entity_alignments": json.loads(row["entity_alignments_json"] or "[]"), "relation_rules": json.loads(row["relation_rules_json"] or "[]")}
+
+    def list_relation_rules(self, project_id: str) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute("SELECT * FROM relation_rules WHERE project_id = ? ORDER BY source_entity, relation_name", (project_id,)).fetchall()
+        return [dict(row) for row in rows]
+
+    def save_relation_rule(self, rule: dict[str, Any]) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connection() as connection:
+            connection.execute(
+                """INSERT INTO relation_rules (id, project_id, source_entity, relation_name, target_entity, source_column, target_column, display_property, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_id, source_entity, relation_name) DO UPDATE SET
+                  target_entity=excluded.target_entity, source_column=excluded.source_column, target_column=excluded.target_column,
+                  display_property=excluded.display_property, updated_at=excluded.updated_at""",
+                (rule["id"], rule["project_id"], rule["source_entity"], rule["relation_name"], rule["target_entity"], rule["source_column"], rule["target_column"], rule.get("display_property"), now, now),
+            )
+            row = connection.execute("SELECT * FROM relation_rules WHERE project_id = ? AND source_entity = ? AND relation_name = ?", (rule["project_id"], rule["source_entity"], rule["relation_name"])).fetchone()
+        return dict(row)
+
+    def delete_relation_rule(self, project_id: str, rule_id: str) -> bool:
+        with self._connection() as connection:
+            cursor = connection.execute("DELETE FROM relation_rules WHERE project_id = ? AND id = ?", (project_id, rule_id))
+        return cursor.rowcount > 0
 
     def list_entity_alignments(self, project_id: str) -> list[dict[str, Any]]:
         with self._connection() as connection:
@@ -176,6 +227,19 @@ class PlatformStateRepository:
         with self._connection() as connection:
             rows = connection.execute("SELECT * FROM entity_alignment_audit_events WHERE project_id = ? ORDER BY created_at DESC LIMIT ?", (project_id, limit)).fetchall()
         return [{**dict(row), "alignment": json.loads(row["alignment_json"])} for row in rows]
+
+    def record_query_audit_event(self, event: dict[str, Any]) -> None:
+        with self._connection() as connection:
+            connection.execute("INSERT INTO query_audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (
+                str(uuid.uuid4()), event["project_id"], event["query_kind"], event.get("mapping_version_id"),
+                json.dumps(event.get("sources", [])), json.dumps(event.get("plan", {})), event.get("result_count"),
+                event["duration_ms"], event.get("error"), datetime.now(timezone.utc).isoformat(),
+            ))
+
+    def list_query_audit_events(self, project_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            rows = connection.execute("SELECT * FROM query_audit_events WHERE project_id = ? ORDER BY created_at DESC LIMIT ?", (project_id, limit)).fetchall()
+        return [{**dict(row), "sources": json.loads(row["sources_json"]), "plan": json.loads(row["plan_json"])} for row in rows]
 
     @staticmethod
     def _record_entity_alignment_audit(connection, alignment: dict[str, Any], action: str) -> None:

@@ -47,6 +47,25 @@ class PostgreSQLSourceAdapter(SourceAdapter):
         with self._connection() as connection, connection.cursor() as cursor:
             cursor.execute(f"SELECT * FROM {quote_identifier(table)}"); return cursor.fetchall()
 
+    def fetch_rows(self, table: str, *, columns: set[str] | None = None, key_column: str | None = None, keys: set[Any] | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 5_000:
+            raise ValueError("Federated source reads require a limit between 1 and 5000")
+        available = self.table_columns(table)
+        selected = columns or available
+        if not selected <= available:
+            raise ValueError(f"Unknown projected column(s) for {table}: {sorted(selected - available)}")
+        sql = f"SELECT {', '.join(quote_identifier(column) for column in sorted(selected))} FROM {quote_identifier(table)}"
+        params: list[Any] = []
+        if key_column is not None and keys is not None:
+            if key_column not in available:
+                raise ValueError(f"Unknown key column for {table}: {key_column}")
+            if not keys:
+                return []
+            sql += f" WHERE {quote_identifier(key_column)} = ANY(%s)"; params.append(list(keys))
+        sql += " LIMIT %s"; params.append(limit)
+        with self._connection() as connection, connection.cursor() as cursor:
+            cursor.execute(sql, params); return cursor.fetchall()
+
     def values(self, table: str, column: str) -> set[Any]:
         with self._connection() as connection, connection.cursor() as cursor:
             cursor.execute(f"SELECT {quote_identifier(column)} AS value FROM {quote_identifier(table)}"); return {item["value"] for item in cursor.fetchall()}

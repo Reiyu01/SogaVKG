@@ -42,6 +42,29 @@
 - [ ] Implement MySQL source adapter.
 - [ ] Separate source credentials from Mapping definitions.
 - [ ] Support property-to-property relation matching, not only ID foreign keys.
+- [ ] Build production-grade federated cross-source querying without mixing source data.
+  - [ ] Move relation join rules from free-form Mapping YAML into a validated, versioned repository model.
+  - [ ] Define restricted `SourceAdapter` query capabilities: projected columns, filters, batched key lookup, pagination, row estimates, and limits.
+  - [ ] Add a `SemanticQueryPlanner` that produces bounded, project-scoped query plans and selects the filtered side first.
+    - [x] Define a Mapping-constrained query-plan DSL: entity projections, approved filters, published relation-rule key handoffs, bounded pagination, and no raw SQL.
+    - [x] Support static plans: the LLM proposes a complete multi-step plan, then the planner validates and executes it with bounded key handoffs. (Cost-based reordering remains pending.)
+    - [ ] Add cost estimation for candidate start points using source row estimates, filter selectivity, key cardinality, and relation direction; reject plans that cannot fit policy budgets.
+    - [ ] Add deterministic plan rewriting/reordering: choose the lowest-cardinality valid filtered side first, or return an explicit request for narrower filters.
+    - [ ] Support adaptive plans: after each bounded source lookup, provide only key counts and approved summaries to choose the next step; enforce maximum hops (3–5), cycle detection, and total budget.
+    - [ ] Add an adaptive execution loop that validates every follow-up LLM step against the same DSL and stops on empty results, policy exhaustion, duplicate/cyclic paths, or a completed answer.
+    - [ ] Implement the hybrid orchestration mode: start from an LLM candidate plan, validate/rewrite it deterministically, and request a follow-up step only when intermediate cardinality materially changes the plan.
+    - [ ] Validate every LLM-proposed step against project Mapping, field permissions, relation-rule direction, allowed operators, source availability, cycle detection, and data/key/result/time budgets.
+    - [ ] Audit both the LLM candidate plan and the final executed plan, including per-step source, cardinality, rule/version lineage, rewrites, and policy rejections.
+  - [ ] Add a `FederatedJoinExecutor` for Mapping-approved one-hop joins with parameterized source subqueries.
+    - [x] First slice: bounded one-hop equality join over the restricted adapter contract, with source lineage.
+  - [ ] Return field-level source provenance, join-rule version, and Mapping version for every federated result.
+  - [ ] Enforce per-source timeouts, row/key/result limits, memory budgets, and explicit errors when a plan exceeds policy.
+    - [x] First slice: join-key/source-row/result-row limits and an overall executor time budget.
+  - [ ] Add query audit events with plan summary, source set, Mapping version, counts, duration, and failures; never store credentials.
+    - [x] First slice: persist query kind, Mapping version, Entity lineage, plan summary, counts, duration, and errors.
+  - [ ] Add real SQLite + PostgreSQL end-to-end integration tests; use Google Sheets only for bounded lookup/cache test cases.
+    - [x] Acceptance baseline: two independent SQLite source profiles → Mapping resolution → adapter lookup → federated join → lineage result.
+  - [ ] Add a materialized read-model option for approved high-volume or high-frequency federated queries.
 - [x] Ingest multiple SQLite sources into one project.
 - [ ] Support concept-level Identity Mapping across source-backed data models.
   - [x] Persist project-scoped entity alignments with source/target matching columns.

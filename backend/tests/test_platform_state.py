@@ -50,6 +50,28 @@ class PlatformStateRepositoryTests(unittest.TestCase):
             self.assertEqual(snapshot["entity_alignments"], [alignment])
             self.assertEqual([event["action"] for event in repository.list_entity_alignment_audit_events("project-1")], ["deleted", "created"])
 
+    def test_query_audit_preserves_plan_and_not_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = PlatformStateRepository(Path(directory) / "platform.db")
+            repository.create_project({"id": "project-1", "name": "Demo"})
+            repository.record_query_audit_event({"project_id": "project-1", "query_kind": "semantic", "sources": ["Asset", "Category"], "plan": {"entity": "Asset"}, "result_count": 1, "duration_ms": 12})
+            event = repository.list_query_audit_events("project-1")[0]
+            self.assertEqual(event["plan"], {"entity": "Asset"})
+            self.assertEqual(event["sources"], ["Asset", "Category"])
+
+    def test_relation_rules_are_project_scoped_and_versioned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            repository = PlatformStateRepository(Path(directory) / "platform.db")
+            repository.create_project({"id": "project-1", "name": "Demo"})
+            rule = repository.save_relation_rule({
+                "id": "rule-1", "project_id": "project-1", "source_entity": "Asset",
+                "relation_name": "category", "target_entity": "Category",
+                "source_column": "category_id", "target_column": "id", "display_property": "name",
+            })
+            version = repository.create_mapping_version("project-1", [{"entity": "Asset"}])
+            self.assertEqual(repository.list_relation_rules("project-1"), [rule])
+            self.assertEqual(repository.get_mapping_version("project-1", version["version"])["relation_rules"], [rule])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2,6 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 import os
 import sqlite3
+from time import monotonic
 from functools import lru_cache
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from app.services.ingestion_job import (
 )
 from app.services.graph_projection import GraphProjectionService
 from app.services.sqlite_semantic_query import SQLiteSemanticQueryService
+from app.services.semantic_query_planner import SemanticQueryPlanner
 from app.services.source_resolution import resolve_entity_source_adapters
 from app.repositories.platform_state import PlatformStateRepository
 
@@ -100,7 +102,7 @@ def get_db() -> Neo4jAdapter:
 
 def get_service(project_id: str) -> SQLiteSemanticQueryService:
     projection = get_projection_service(project_id)
-    return SQLiteSemanticQueryService(get_mapper(project_id), projection.sources)
+    return SQLiteSemanticQueryService(get_mapper(project_id), projection.sources, state_repository.list_relation_rules(project_id))
 
 
 def get_nl_graph(project_id: str) -> NLQueryGraph:
@@ -112,6 +114,20 @@ def get_nl_graph(project_id: str) -> NLQueryGraph:
     )
 
 
+def audit_query(project_id: str, query_kind: str, started: float, response: dict, plan: dict | None = None) -> None:
+    lineage = response.get("result", {}).get("lineage", {})
+    latest_version = state_repository.latest_mapping_version(project_id)
+    state_repository.record_query_audit_event({
+        "project_id": project_id, "query_kind": query_kind,
+        "mapping_version_id": latest_version["id"] if latest_version else None,
+        "sources": lineage.get("entities", []),
+        "plan": plan or response.get("translated_query", {}),
+        "result_count": response.get("result", {}).get("count"),
+        "duration_ms": round((monotonic() - started) * 1000),
+        "error": response.get("error"),
+    })
+
+
 # ======================================================
 # Structured Semantic Query
 # ======================================================
@@ -121,7 +137,14 @@ def query(
     request: SemanticQuery,
     project_id: str,
 ):
-    return get_service(project_id).execute(request, project_id=project_id)
+    started = monotonic()
+    try:
+        result = get_service(project_id).execute(request, project_id=project_id)
+        audit_query(project_id, "semantic", started, {"result": result}, request.model_dump())
+        return result
+    except Exception as error:
+        audit_query(project_id, "semantic", started, {"error": str(error)}, request.model_dump())
+        raise
 
 
 # ======================================================
@@ -133,6 +156,10 @@ class NLQueryRequest(BaseModel):
     project_id: str
     expand_identity_mappings: bool = False
 
+class StaticQueryPlanRequest(BaseModel):
+    project_id: str
+    steps: list[dict]
+
 class DeactivateNodesRequest(BaseModel):
     project_id: str
     entity: str
@@ -143,9 +170,34 @@ class DeactivateNodesRequest(BaseModel):
 def ask(
     request: NLQueryRequest,
 ):
-    return get_nl_graph(request.project_id).run(
-        request.question, request.expand_identity_mappings
-    )
+    started = monotonic()
+    response = get_nl_graph(request.project_id).run(request.question, request.expand_identity_mappings)
+    audit_query(request.project_id, "ai", started, response)
+    return response
+
+
+@router.post("/plan/static")
+def execute_static_plan(request: StaticQueryPlanRequest):
+    """Execute an LLM-proposed plan only after Mapping/rule validation."""
+    started = monotonic()
+    try:
+        projection = get_projection_service(request.project_id)
+        result = SemanticQueryPlanner(
+            get_mapper(request.project_id), projection.sources,
+            state_repository.list_relation_rules(request.project_id),
+        ).execute_static(request.model_dump(exclude={"project_id"}))
+        audit_query(request.project_id, "static_plan", started, {"result": result}, {"steps": request.steps})
+        return result
+    except Exception as error:
+        audit_query(request.project_id, "static_plan", started, {"error": str(error)}, {"steps": request.steps})
+        raise
+
+
+@router.get("/audit-events")
+def query_audit_events(project_id: str):
+    if state_repository.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"events": state_repository.list_query_audit_events(project_id)}
 
 @router.post("/graph/deactivate")
 def deactivate_nodes(request: DeactivateNodesRequest):

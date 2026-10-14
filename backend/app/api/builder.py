@@ -91,6 +91,15 @@ class EntityAlignmentRequest(BaseModel):
     relation_type: str = "CONCEPT_EQUIVALENT_TO"
     normalization_rule: str = "exact"
 
+class RelationRuleRequest(BaseModel):
+    project_id: str
+    source_entity: str
+    relation_name: str = Field(min_length=1, max_length=120)
+    target_entity: str
+    source_column: str
+    target_column: str
+    display_property: str | None = None
+
 # ======================================================
 # Helpers
 # ======================================================
@@ -466,6 +475,45 @@ def delete_entity_alignment(alignment_id: str, project_id: str):
     return {"status": "deleted", "id": alignment_id}
 
 
+def validate_relation_rule(request: RelationRuleRequest) -> None:
+    if state_repository.get_project(request.project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if request.source_entity == request.target_entity:
+        raise HTTPException(status_code=400, detail="Relation rule must connect two different entity types")
+    try:
+        mapper = get_mapper(request.project_id)
+        source_mapping = mapper.get_entity(request.source_entity)
+        target_mapping = mapper.get_entity(request.target_entity)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    source_columns = {item.get("column") for item in source_mapping.get("properties", {}).values()} | {source_mapping.get("ingestion", {}).get("primary_key", "id")}
+    target_columns = {item.get("column") for item in target_mapping.get("properties", {}).values()} | {target_mapping.get("ingestion", {}).get("primary_key", "id")}
+    if request.source_column not in source_columns or request.target_column not in target_columns:
+        raise HTTPException(status_code=400, detail="Relation rule fields must be mapped source columns")
+    if request.display_property and request.display_property not in target_mapping.get("properties", {}):
+        raise HTTPException(status_code=400, detail="Relation display_property must be a mapped target property")
+
+
+@router.get("/relation-rules")
+def list_relation_rules(project_id: str):
+    if state_repository.get_project(project_id) is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"relation_rules": state_repository.list_relation_rules(project_id)}
+
+
+@router.post("/relation-rules")
+def save_relation_rule(request: RelationRuleRequest):
+    validate_relation_rule(request)
+    return state_repository.save_relation_rule({"id": str(uuid.uuid4()), **request.model_dump()})
+
+
+@router.delete("/relation-rules/{rule_id}")
+def delete_relation_rule(rule_id: str, project_id: str):
+    if not state_repository.delete_relation_rule(project_id, rule_id):
+        raise HTTPException(status_code=404, detail="Relation rule not found")
+    return {"status": "deleted", "id": rule_id}
+
+
 # ======================================================
 # Graph Preview
 # ======================================================
@@ -587,7 +635,7 @@ def start_build(
         mapper,
         resolve_entity_source_adapters(mapper, state_repository.list_sources(request.project_id)),
     )
-    version = state_repository.create_mapping_version(request.project_id, list(mapper.mappings.values()), state_repository.list_entity_alignments(request.project_id))
+    version = state_repository.create_mapping_version(request.project_id, list(mapper.mappings.values()), state_repository.list_entity_alignments(request.project_id), state_repository.list_relation_rules(request.project_id))
     job = create_job(source_id=source_id, project_id=request.project_id)
     job.mapping_version_id = version["id"]
     job.status = "done"

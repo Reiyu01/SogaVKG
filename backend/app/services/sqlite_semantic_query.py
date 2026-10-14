@@ -13,11 +13,13 @@ from app.adapters.source_adapter import SQLiteSourceAdapter, SourceAdapter
 from app.schemas.semantic_query import SemanticQuery
 from app.semantic.mapper import SemanticMapper
 from app.services.entity_alignment import normalize_identity_key
+from app.services.federated_join import FederatedJoinExecutor
 
 
 class SemanticQueryService:
-    def __init__(self, mapper: SemanticMapper, sources: SourceAdapter | dict[str, SourceAdapter] | Path | dict[str, Path]):
+    def __init__(self, mapper: SemanticMapper, sources: SourceAdapter | dict[str, SourceAdapter] | Path | dict[str, Path], relation_rules: list[dict[str, Any]] | None = None):
         self.mapper = mapper
+        self.relation_rules = relation_rules or []
         if isinstance(sources, Path):
             adapter = SQLiteSourceAdapter(sources)
             self.sources = {entity: adapter for entity in mapper.mappings}
@@ -32,6 +34,12 @@ class SemanticQueryService:
 
     def source_for_entity(self, entity: str) -> SourceAdapter:
         return self.sources[entity]
+
+    def _relation_target(self, entity: str, field: str) -> str | None:
+        rule = next((item for item in self.relation_rules if item["source_entity"] == entity and item["relation_name"] == field), None)
+        if rule:
+            return rule["target_entity"]
+        return self.mapper.get_entity(entity).get("relations", {}).get(field, {}).get("target", {}).get("entity")
 
     @staticmethod
     def _table(mapping: dict[str, Any]) -> str:
@@ -91,6 +99,15 @@ class SemanticQueryService:
         return {">": value > expected, ">=": value >= expected, "<": value < expected, "<=": value <= expected}[operator]
 
     def execute(self, query: SemanticQuery, project_id: str | None = None) -> dict[str, Any]:
+        cross_source_filters = [
+            item for item in query.filters
+            if self._relation_target(query.entity, item.field)
+            and self.source_for_entity(query.entity) is not self.source_for_entity(self._relation_target(query.entity, item.field))
+        ]
+        if cross_source_filters:
+            if len(cross_source_filters) != 1 or len(query.filters) != 1 or cross_source_filters[0].operator != "=":
+                raise ValueError("Federated queries currently support one cross-source relation equality filter")
+            return FederatedJoinExecutor(self.mapper, self.sources, relation_rules=self.relation_rules).execute_relation_filter(query, cross_source_filters[0].field, cross_source_filters[0].value)
         mapping = self.mapper.get_entity(query.entity)
         fields = query.fields or list(mapping.get("properties", {}).keys())
         rows = self.source_for_entity(query.entity).read_rows(self._table(mapping))

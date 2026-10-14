@@ -27,6 +27,22 @@ class SourceAdapter(ABC):
     @abstractmethod
     def duplicate_keys(self, table: str, primary_key: str) -> dict[str, Any]: ...
 
+    def fetch_rows(self, table: str, *, columns: set[str] | None = None, key_column: str | None = None, keys: set[Any] | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        """Restricted read contract for federated queries.
+
+        Adapters may override this with parameterized source-native lookups.
+        The safe fallback intentionally exposes no arbitrary SQL and enforces a
+        bounded result even for sources without query pushdown (e.g. Sheets).
+        """
+        if limit < 1 or limit > 5_000:
+            raise ValueError("Federated source reads require a limit between 1 and 5000")
+        rows = self.read_rows(table)
+        if key_column is not None and keys is not None:
+            rows = [row for row in rows if row.get(key_column) in keys]
+        if columns is not None:
+            rows = [{column: row.get(column) for column in columns} for row in rows]
+        return rows[:limit]
+
 
 def quote_identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
@@ -62,6 +78,26 @@ class SQLiteSourceAdapter(SourceAdapter):
     def read_rows(self, table: str) -> list[dict[str, Any]]:
         with self._connection() as connection:
             return [dict(row) for row in connection.execute(f"SELECT * FROM {quote_identifier(table)}")]
+
+    def fetch_rows(self, table: str, *, columns: set[str] | None = None, key_column: str | None = None, keys: set[Any] | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        if limit < 1 or limit > 5_000:
+            raise ValueError("Federated source reads require a limit between 1 and 5000")
+        available = self.table_columns(table)
+        selected = columns or available
+        if not selected <= available:
+            raise ValueError(f"Unknown projected column(s) for {table}: {sorted(selected - available)}")
+        sql = f"SELECT {', '.join(quote_identifier(column) for column in sorted(selected))} FROM {quote_identifier(table)}"
+        params: list[Any] = []
+        if key_column is not None and keys is not None:
+            if key_column not in available:
+                raise ValueError(f"Unknown key column for {table}: {key_column}")
+            if not keys:
+                return []
+            sql += f" WHERE {quote_identifier(key_column)} IN ({', '.join('?' for _ in keys)})"
+            params.extend(keys)
+        sql += " LIMIT ?"; params.append(limit)
+        with self._connection() as connection:
+            return [dict(row) for row in connection.execute(sql, params)]
 
     def values(self, table: str, column: str) -> set[Any]:
         with self._connection() as connection:

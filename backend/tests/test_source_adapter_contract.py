@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import sqlite3
 from pathlib import Path
 
 from app.adapters.source_adapter import SourceAdapter
@@ -7,6 +8,7 @@ from app.schemas.semantic_query import SemanticQuery
 from app.semantic.mapper import SemanticMapper
 from app.services.graph_projection import GraphProjectionService
 from app.services.sqlite_semantic_query import SemanticQueryService
+from app.adapters.source_adapter import SQLiteSourceAdapter
 
 
 class MemoryPostgreSQLAdapter(SourceAdapter):
@@ -25,6 +27,13 @@ class MemoryPostgreSQLAdapter(SourceAdapter):
 
 
 class SourceAdapterContractTests(unittest.TestCase):
+    def test_sqlite_fetch_rows_pushes_key_lookup_projection_and_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / "source.db"
+            with sqlite3.connect(database) as connection:
+                connection.executescript("CREATE TABLE assets (id INTEGER, name TEXT, secret TEXT); INSERT INTO assets VALUES (1, 'Camera', 'x'), (2, 'Sensor', 'y');")
+            rows = SQLiteSourceAdapter(database).fetch_rows("assets", columns={"id", "name"}, key_column="id", keys={2}, limit=1)
+            self.assertEqual(rows, [{"id": 2, "name": "Sensor"}])
     def _mapper(self, root: Path) -> SemanticMapper:
         mappings = root / "mappings"; mappings.mkdir()
         asset = "entity: Asset\ningestion: {source_table: assets, primary_key: id}\nproperties: {name: {column: name}, quantity: {column: quantity}}\nrelations:\n  category:\n    ingestion: {foreign_key: category_id, target_key: id}\n    target: {entity: Category}\n    display: {property: name}\n"
@@ -42,13 +51,14 @@ class SourceAdapterContractTests(unittest.TestCase):
             result = SemanticQueryService(mapper, sources).execute(SemanticQuery(entity="Asset", fields=["name", "category"], limit=10))
             self.assertEqual(result["data"], [{"name": "Camera", "category": "Optics"}])
 
-    def test_cross_source_relation_query_has_explicit_error(self):
+    def test_cross_source_relation_query_uses_bounded_mapping_approved_join(self):
         with tempfile.TemporaryDirectory() as directory:
             mapper = self._mapper(Path(directory))
             assets = MemoryPostgreSQLAdapter({"assets": [{"id": 1, "name": "Camera", "quantity": 2, "category_id": 10}]})
             categories = MemoryPostgreSQLAdapter({"categories": [{"id": 10, "name": "Optics"}]})
-            with self.assertRaisesRegex(ValueError, "Cross-source relation query is not supported"):
-                SemanticQueryService(mapper, {"Asset": assets, "Category": categories}).execute(SemanticQuery(entity="Asset", fields=["category"]))
+            result = SemanticQueryService(mapper, {"Asset": assets, "Category": categories}).execute(SemanticQuery(entity="Asset", fields=["name", "category"], filters=[{"field": "category", "operator": "=", "value": "Optics"}]))
+            self.assertEqual(result["data"], [{"name": "Camera", "category": "Optics"}])
+            self.assertTrue(result["lineage"]["federated"])
 
 
 if __name__ == "__main__":
